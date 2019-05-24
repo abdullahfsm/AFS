@@ -190,27 +190,27 @@ def heuristic(jobs, total_gpus):
     shortest.schedule(g)
     gpus = total_gpus - g
 
-    jobs = [j for j in jobs if not j is shortest]
+    js = [j for j in jobs if not j is shortest]
 
-    req_list = [m.max_gpus for m in jobs]
+    req_list = [m.max_gpus for m in js]
     alloc_list, _ = round_robin(req_list, gpus)
-    for i, m in enumerate(jobs):
+    for i, m in enumerate(js):
         m.schedule(alloc_list[i])
 
 def max_speedup(jobs, total_gpus):
-    jobs = [m for m in jobs]
-    for m in jobs:
+    js = [m for m in jobs]
+    for m in js:
         m.gpus = 0
     gpus = total_gpus
-    while gpus > 0 and len(jobs) > 0:
-        cand = jobs[0]
-        for m in jobs[1:]:
+    while gpus > 0 and len(js) > 0:
+        cand = js[0]
+        for m in js[1:]:
             if m.speedup(m.gpus + 1) - m.speedup(m.gpus) > \
                     cand.speedup(cand.gpus + 1) - cand.speedup(cand.gpus):
                 cand = m
         cand.gpus += 1
         if cand.gpus == cand.max_gpus:
-            jobs.remove(cand)
+            js.remove(cand)
         gpus -= 1
 
     for m in jobs:
@@ -220,31 +220,31 @@ def opt_gs(jobs, total_gpus):
     def g(m):
         return (m.speedup(m.gpus + 1) - m.speedup(m.gpus))/m.speedup(m.max_gpus)
 
-    jobs = [m for m in jobs]
-    for m in jobs:
+    js = [m for m in jobs]
+    for m in js:
         m.gpus = 0
     gpus = total_gpus
-    while gpus > 0 and len(jobs) > 0:
-        cand = jobs[0]
-        for m in jobs[1:]:
+    while gpus > 0 and len(js) > 0:
+        cand = js[0]
+        for m in js[1:]:
             if g(m) > g(cand):
                 cand = m
         cand.gpus += 1
         if cand.gpus == cand.max_gpus:
-            jobs.remove(cand)
+            js.remove(cand)
         gpus -= 1
 
     for m in jobs:
         m.schedule(m.gpus)
 
 def opt_2jobs(jobs, total_gpus):
-    jobs = [m for m in jobs]
-    for m in jobs:
+    js = [m for m in jobs]
+    for m in js:
         m.gpus = 0
     gpus = total_gpus
-    while gpus > 0 and len(jobs) > 0:
-        cand = jobs[0]
-        for m in jobs[1:]:
+    while gpus > 0 and len(js) > 0:
+        cand = js[0]
+        for m in js[1:]:
             if m.finish_time() < cand.finish_time():
                 l = m
                 h = cand
@@ -267,7 +267,7 @@ def opt_2jobs(jobs, total_gpus):
                 cand = h
         cand.gpus += 1
         if cand.gpus == cand.max_gpus:
-            jobs.remove(cand)
+            js.remove(cand)
         gpus -= 1
     for m in jobs:
         m.schedule(m.gpus)
@@ -340,9 +340,9 @@ def tiresias_las(jobs, total_gpus, thres=2*3600, starving_timeout=None):
                 m.schedule(m.max_gpus, thres / m.max_gpus)
                 gpus -= m.max_gpus
     # Schedule prior jobs first
-    jobs = sorted(no_preempt, key=lambda m: m.init_sched_time) + \
+    js = sorted(no_preempt, key=lambda m: m.init_sched_time) + \
             sorted(preempt, key=lambda m: m.init_sched_time)
-    for m in jobs:
+    for m in js:
         if m.max_gpus <= gpus:
             m.schedule(m.max_gpus, thres / m.max_gpus)
             gpus -= m.max_gpus
