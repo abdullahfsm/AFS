@@ -10,20 +10,22 @@ class Model(object):
         self.arrival_time = arrival_time
         self.total_iter = int(total_iter * _SCALE_TOTAL_ITER)
         self.times_per_iter = times_per_iter
+        self.throughputs = [1 / float(t) for t in times_per_iter]
         self.speedups = [times_per_iter[0] / float(t) for t in times_per_iter]
 
         # Number of iterations remaining
         self.remain_iter = self.total_iter
         # Number of GPUs currently allocated
         self.gpus = 0
-        # Current time
-        self.current_time = arrival_time + 1e-5
-        # How long has this model been waiting (alloced zero GPUs) since arrival
-        self.waiting_time = 0
-        # How long has this model been using at least one GPU since last waiting
-        self.running_time = 0
-        # How long has this model been waiting since last running
-        self.starving_time = 0
+        # Current absolute time
+        self.current_time = arrival_time
+        # The recent absolute time when is alloced zero GPU
+        self.evicted_time = arrival_time
+        # The recent absolute time when is alloced one or more GPUs
+        self.preempted_time = 0
+        # How long has this model been evicted since arrival
+        self.total_evicted = 0
+        self.total_evicted_temp = 0
         # Abs time when the model is initially executed
         self.init_sched_time = INF
         # The nearest abs time when this model raises a re-allocation event.
@@ -45,7 +47,19 @@ class Model(object):
 
     @property
     def just_arrived(self):
-        return self.current_time == self.arrival_time + 1e-5
+        return self.current_time == self.arrival_time
+
+    @property
+    def running_for(self):
+        if self.preempted_time == 0:
+            return 0
+        return self.current_time - self.preempted_time
+
+    @property
+    def starving_for(self):
+        if self.evicted_time == 0:
+            return 0
+        return self.current_time - self.evicted_time
 
     def time_per_iter(self, num_gpus):
         if num_gpus <= 0:
@@ -74,6 +88,7 @@ class Model(object):
 
     def schedule(self, num_gpus, timeout=None):
         assert(num_gpus >= 0)
+        assert(num_gpus <= self.max_gpus)
         assert(timeout is None or timeout >= 0)
         self.gpus = num_gpus
         fin_time = self.finish_time()
@@ -83,34 +98,36 @@ class Model(object):
         else:
             # Set the nearest event only
             self.next_event_time = min(fin_time, self.current_time + timeout)
+        # print('schedule %s: %f, %f' % (self.name, fin_time, self.current_time))
 
     def continue_until(self, time):
         """Progress time until `time`."""
-        rel_time = time - self.current_time
-        if rel_time == 0:
+        time_diff = time - self.current_time
+        if time_diff < 0:
+            raise Exception('cur_time %d, time %d' % (self.current_time, time))
+        if time_diff == 0:
             return
-        if rel_time <= 0:
-            raise Exception('cur_time %f, time %f' % (self.current_time, time))
-        assert(rel_time > 0)
         if self.gpus == 0:
-            self.current_time += rel_time
-            self.waiting_time += rel_time
-            self.starving_time += rel_time
-            self.running_time = 0
+            if self.evicted_time == 0:
+                self.evicted_time = self.current_time
+                self.preempted_time = 0
+            self.current_time = time
+            self.total_evicted = self.total_evicted_temp + time - self.evicted_time
         else:
+            if self.preempted_time == 0:
+                self.total_evicted_temp += self.current_time - self.evicted_time
+                self.preempted_time = self.current_time
+                self.evicted_time = 0
             tpi = self.times_per_iter[self.gpus - 1]
-            num_iter = int(rel_time / float(tpi))
-            if self.remain_iter <= num_iter:
+            proced_iter = int(time_diff / float(tpi) + 1e-5)
+            if self.remain_iter <= proced_iter:
                 # Job finishes
                 self.remain_iter = 0
-                self.current_time += num_iter * tpi
+                self.current_time += proced_iter * tpi
             else:
                 # Still has remaining iterations
-                self.remain_iter -= num_iter
+                self.remain_iter -= proced_iter
                 self.current_time = time
-            self.running_time += num_iter * tpi
-            self.starving_time = 0
-            self.running_time += rel_time
             if self.init_sched_time == INF:
                 self.init_sched_time = time
 
@@ -137,7 +154,7 @@ class Model(object):
         return '%.1f,%s,%.1f,%.1f' % (self.current_time,
                                       self.name,
                                       self.current_time - self.arrival_time,
-                                      self.waiting_time)
+                                      self.total_evicted)
 
 ################################################################################
 

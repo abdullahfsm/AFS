@@ -1,6 +1,7 @@
 import sys
 import time
 import numpy as np
+from collections import OrderedDict
 
 import algs
 from models import *
@@ -20,24 +21,26 @@ MODEL_POOL = [
 ]
 ALGS = [
     # 'brute_force_ne',
-    'srtf_ne',
-    'srsf_ne',
+    # 'srtf_ne',
+    # 'srsf_ne',
     # 'srtf_relaxed',
     # 'tiresias_las',
     'max_min',
+    'optimus',
     'max_speedup',
     'opt_2jobs',
     'opt_gs',
     'opt_tsgs',
-    'optimus',
-    'heuristic',
+    'opt_tsgs_new',
+    'opt_boundary',
+    'opt_greedy',
     'brute_force',
 ]
 INF = float('inf')
 
 def log(msg, end='\n'):
     if not NO_LOG:
-        sys.stderr.write('%s%s' % (msg, end))
+        sys.stderr.write('%s%s' % (str(msg), end))
 
 class Trace(object):
     def __init__(self, model_pool, avg_interval, total_num):
@@ -48,24 +51,22 @@ class Trace(object):
         for _ in range(total_num):
             rand_model = model_pool[np.random.randint(0, len(model_pool))]
             trace.append((abs_time, rand_model))
-            abs_time += np.random.poisson(avg_interval)
+            abs_time += int(np.random.poisson(avg_interval))
         self.trace = tuple(trace)
 
 class Scheduler(object):
     def __init__(self, alg, total_gpus, trace):
         self.unfinished = []
         self.finished = []
-        self.max_running_jobs = 0
         self.total_gpus = total_gpus
         self.trace = trace
         self.current_time = 0
         self.current_trace_idx = 0
+        self.state = OrderedDict()
         self.assign = algs.__dict__[alg]
-    
+
     def continue_until_next_event(self):
         # Check the nearest event from unfinished jobs
-        if len(self.unfinished) > self.max_running_jobs:
-            self.max_running_jobs = len(self.unfinished)
         if len(self.unfinished) > 0:
             nearest_event_time = min([m.next_event_time for m in self.unfinished])
         else:
@@ -82,14 +83,22 @@ class Scheduler(object):
         else:
             next_event_time = arrival_time
             arrival = True
+        next_event_time = int(next_event_time + 0.999999)
+        if next_event_time == self.current_time:
+            next_event_time += 1
+        elif next_event_time < self.current_time:
+            next_event_time = self.current_time
         # print('NEXT_EVENT: %f, ARRIVAL: %f' % (next_event_time, arrival_time))
         unfinished = []
         for m in self.unfinished:
             # Add very little amount of time to surely trigger the event
-            m.continue_until(next_event_time + 1e-5)
+            m.continue_until(next_event_time)
             if m.is_finished:
                 self.finished.append(m)
-                log(m.finish_info())
+                log('%s, SumJCT %.1f %d' % \
+                        (m.finish_info(),
+                        sum([m.current_time - m.arrival_time for m in self.finished]),
+                        len(self.unfinished)))
             else:
                 unfinished.append(m)
         self.unfinished = unfinished
@@ -100,10 +109,12 @@ class Scheduler(object):
             self.unfinished.append(model(self.current_time))
         # Assign GPUs to all jobs
         if len(self.unfinished) > 0:
-            self.assign(self.unfinished, self.total_gpus)
-        log('%.1f,%s' % (self.current_time,
+            self.assign(self.unfinished, self.total_gpus, self.state)
+        log('%d,%s' % (self.current_time,
                 str([(m.name, m.gpus, m.remain_iter) for m in self.unfinished])))
-        assert(self.total_gpus >= sum([m.gpus for m in self.unfinished]))
+        if not self.total_gpus >= sum([m.gpus for m in self.unfinished]):
+            raise Exception('Invalid allocation of total %d GPUs: %s' % \
+                    (self.total_gpus, str([m.gpus for m in self.unfinished])))
 
 def run_sim(alg, num_gpus, trace):
     sched = Scheduler(alg, num_gpus, trace)

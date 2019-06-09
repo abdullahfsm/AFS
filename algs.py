@@ -1,7 +1,10 @@
-
+import sys
 from itertools import permutations
 
 INF = float('inf')
+
+def log(msg, end='\n'):
+    sys.stderr.write('%s%s' % (str(msg), end))
 
 def round_robin(request_list, total_amount):
     """Return a list of allocated # of resources in Round-Robin manner.
@@ -9,7 +12,7 @@ def round_robin(request_list, total_amount):
       Args:
         request_list:   (list) requested amounts in integer each.
         total_amount:   (int) total amount to assign.
-    
+
       Returns:
         List of assigned amounts in integer each, remaining amount of resource
     """
@@ -26,15 +29,192 @@ def round_robin(request_list, total_amount):
                     break
     return assign_list, total_amount
 
+def argmax(seq):
+    val = -INF
+    idx = None
+    for i, v in enumerate(seq):
+        if v > val:
+            val = v
+            idx = i
+    return idx, val
+
+def argmin(seq, key=None):
+    val = INF
+    idx = None
+    if key is None:
+        for i, v in enumerate(seq):
+            if v < val:
+                val = v
+                idx = i
+    else:
+        for i, v in enumerate(seq):
+            this_val = key(v)
+            if this_val < val:
+                val = this_val
+                idx = i
+    return idx, val
+
+def jct_factor(pmap):
+    """
+      Args:
+        pmap:  2D list of p_(job;slot). E.g.
+                [[p_00, p_10, p_20],
+                 [      p_11, p_21],
+                 [            p_22]]
+    """
+    n = len(pmap[0])
+    f = 1
+    jfs = [1]
+    for j in range(1, n):
+        # jp: list of p_(job;slot) of job j. E.g. [p_20, p_21, p_22].
+        jp = [pmap[s][j - n] for s in range(j + 1)]
+        jf = 0
+        for i in range(j):
+            jf += jfs[i] * (jp[i + 1] - jp[i])
+        jf /= jp[-1]
+        f += jf
+        jfs.append(jf)
+    return f
+
+def calc_jcts(js, shares):
+    n = len(js)
+    jct = js[0].remain(shares[0][0])
+    ts = [jct]
+    jcts = [jct]
+    for j in range(1, n):
+        # share: list of share of job j.
+        m = js[j]
+        share = [shares[s][j - n] for s in range(j + 1)]
+        jct = 0
+        remain = m.remain_iter
+        for i in range(j):
+            jct += ts[i]
+            remain -= int(ts[i] * m.throughput(share[i]))
+        t = remain * m.time_per_iter(share[j])
+        jct += t
+        jcts.append(jct)
+        ts.append(t)
+    return jcts
+
+def calc_sum_jct(js, shares):
+    n = len(js)
+    sum_jct = js[0].remain(shares[0][0])
+    ts = [sum_jct]
+    for j in range(1, n):
+        # share: list of share of job j.
+        m = js[j]
+        share = [shares[s][j - n] for s in range(j + 1)]
+        jct = 0
+        remain = m.remain_iter
+        for i in range(j):
+            jct += ts[i]
+            remain -= int(ts[i] * m.throughput(share[i]))
+        t = remain * m.time_per_iter(share[j])
+        jct += t
+        sum_jct += jct
+        ts.append(t)
+    return sum_jct
+
+def opt_r(js, total_gpus):
+    """
+      Args:
+        js: List of jobs in finishing order.
+    """
+    n = len(js)
+    rmap = [[1] + [0] * i for i in range(n - 1, 0, -1)]
+    rmap.append([min(js[-1].max_gpus, total_gpus)])
+    pmap = [[js[n - i - 1].throughput(1)] + [0] * i for i in range(n - 1, 0, -1)]
+    pmap.append([js[-1].throughput(min(js[-1].max_gpus, total_gpus))])
+    facs = [0] * (n - 1)
+    facs.append(1)
+    # Optimize rmap
+    for i in range(n - 2, -1, -1):
+        # Start from the longest job to the shortest one
+        fac = jct_factor(pmap[i:])
+        gpus = 1
+        while gpus < total_gpus:
+            # Compare gain of each job and get the max one
+            j = js[i]
+            r = rmap[i][0]
+            # print(rmap, end=',')
+            if r < j.max_gpus:
+                max_gain = fac * (1 - j.throughput(r) / j.throughput(r + 1))
+                max_k = i
+                # rmap[i][0] += 1
+                # print('JCT(%s) %.1f, ' % (str(rmap), calc_sum_jct(js, rmap)), end='')
+                # rmap[i][0] -= 1
+            else:
+                max_gain = -1
+                max_k = None
+            # print('%.4f' % max_gain, end=',')
+            for k in range(i + 1, n):
+                if rmap[i + 1][k - i - 1] == 0:
+                    continue
+                j = js[k]
+                r = rmap[i][k - i]
+                if r >= j.max_gpus:
+                    continue
+                gain = facs[k] * (j.throughput(r + 1) - j.throughput(r)) / j.throughput(rmap[k][0])
+                if gain > max_gain:
+                    max_gain = gain
+                    max_k = k
+                # rmap[i][k - i] += 1
+                # print('JCT(%s) %.1f, ' % (str(rmap), calc_sum_jct(js, rmap)), end='')
+                # rmap[i][k - i] -= 1
+                # print('%.4f' % gain, end=',')
+            if max_k is None:
+                # print('')
+                break
+            # Give one more GPU to the max one
+            rmap[i][max_k - i] += 1
+            p_old = pmap[i][max_k - i]
+            p_new = js[max_k].throughput(rmap[i][max_k - i])
+            pmap[i][max_k - i] = p_new
+            if max_k != i:
+                # Update fac
+                fac -= (p_new - p_old) / pmap[max_k][0]
+            # print('AvgJCT: %.1f' % calc_sum_jct(js, rmap))
+            gpus += 1
+        # Store fac
+        facs[i] = fac
+    # Validate
+    for i in range(n):
+        for j in range(i + 1):
+            assert(rmap[j][i - j] <= js[i].max_gpus)
+    # Return list of GPU share of each slot
+    return rmap
+
 ################################################################################
 
-def max_min(jobs, total_gpus):
+def max_min_test(jobs, total_gpus, state):
+    remain_dict = {m: m.remain_iter for m in jobs}
+    gpus_dict = {m: [] for m in jobs}
+    js = [m for m in jobs]
+    order = []
+    while len(js) > 0:
+        share, _ = round_robin([m.max_gpus for m in js], total_gpus)
+        for g, m in zip(share, js):
+            gpus_dict[m].append(g)
+        idx, t = argmin(js,
+                key=lambda m: remain_dict[m] * m.time_per_iter(gpus_dict[m][-1]))
+        order.append(js[idx])
+        del js[idx]
+        for m in js:
+            remain_dict[m] -= int(t / m.time_per_iter(gpus_dict[m][-1]))
+    shares = []
+    for i in range(len(jobs)):
+        shares.append([gpus_dict[m][i] for m in order[i:]])
+    log('%d,%f' % (jobs[0].current_time, calc_sum_jct(order, shares)))
+    for g, m in zip(shares[0], order):
+        m.schedule(g)
+
+def max_min(jobs, total_gpus, state):
     req_list = [m.max_gpus for m in jobs]
     alloc_list, _ = round_robin(req_list, total_gpus)
     for i, m in enumerate(jobs):
         m.schedule(alloc_list[i])
 
-def brute_force_ne(jobs, total_gpus):
+def brute_force_ne(jobs, total_gpus, state):
     num = len(jobs)
     orders = permutations(range(num), num)
     min_sum_jct = INF
@@ -75,7 +255,7 @@ def brute_force_ne(jobs, total_gpus):
             gpus -= m.max_gpus
             m.schedule(m.max_gpus)
 
-def brute_force(jobs, total_gpus):
+def brute_force(jobs, total_gpus, state):
     def gen_dist_helper(curs, mins, reqs, total, idx):
         if idx < len(curs) - 1:
             if sum(reqs[idx:]) < total:
@@ -134,7 +314,80 @@ def brute_force(jobs, total_gpus):
     for g, m in zip(share, jobs):
         m.schedule(g)
 
-def srtf_ne(jobs, total_gpus):
+def opt_greedy(jobs, total_gpus, state):
+    num_jobs = len(jobs)
+    min_sum_jct = INF
+    min_js = None
+    min_share = None
+    for js in permutations(jobs):
+        shares = opt_r(js, total_gpus)
+        sum_jct = calc_sum_jct(js, shares)
+        # print(js, shares[0], sum_jct/num_jobs/3600)
+        if sum_jct < min_sum_jct:
+            min_sum_jct = sum_jct
+            min_js = js
+            min_share = shares[0]
+
+    for i, m in enumerate(min_js):
+        m.schedule(min_share[i])
+
+def opt_boundary(jobs, total_gpus, state):
+    if not jobs[-1].just_arrived:
+        # jobs finished
+        n = len(jobs)
+        del state[0][:-n]
+        del state[1][:-n]
+        for g, j in zip(state[0][0], state[1]):
+            j.schedule(g)
+        # try:
+        #     log('%d,%f' % (j.current_time, calc_sum_jct(state[1], state[0])))
+        # except:
+        #     raise Exception('Invalid share:\n%s\n%s' % (str(state[1]), str(state[0])))
+        return
+
+    for m in jobs:
+        m.gpus = 0
+
+    gpus = total_gpus
+    while gpus > 0:
+        max_val = 0
+        j = None
+        for m in jobs:
+            if m.gpus == m.max_gpus:
+                continue
+            val = m.remain(m.gpus) - m.remain(m.gpus + 1)
+            if val > max_val:
+                max_val = val
+                j = m
+        if j is None:
+            break
+        j.gpus += 1
+        gpus -= 1
+
+    js = sorted(jobs, key=lambda m: m.remain(m.gpus))
+    shares = opt_r(js, total_gpus)
+    for x in range(len(jobs)):
+        jcts = calc_jcts(js, shares)
+        jcts, new_js = zip(*sorted(zip(jcts, js), key=lambda t: t[0]))
+        is_equal = True
+        for new, old in zip(new_js, js):
+            if not new is old:
+                is_equal = False
+                break
+        js = list(new_js)
+        if is_equal:
+            break
+        shares = opt_r(js, total_gpus)
+
+    share = shares[0]
+    # log('%d,%f' % (js[0].current_time, sum(jcts)))
+
+    for i, m in enumerate(js):
+        m.schedule(share[i])
+    state[0] = shares
+    state[1] = js
+
+def srtf_ne(jobs, total_gpus, state):
     srtf_sorted = sorted(jobs, key=lambda m: m.remain(m.max_gpus))
     gpus = total_gpus
     for m in srtf_sorted:
@@ -144,7 +397,7 @@ def srtf_ne(jobs, total_gpus):
             gpus -= m.max_gpus
             m.schedule(m.max_gpus)
 
-def srsf_ne(jobs, total_gpus):
+def srsf_ne(jobs, total_gpus, state):
     srsf_sorted = sorted(jobs, key=lambda m: m.max_gpus * m.remain(m.max_gpus))
     gpus = total_gpus
     for m in srsf_sorted:
@@ -154,7 +407,7 @@ def srsf_ne(jobs, total_gpus):
             gpus -= m.max_gpus
             m.schedule(m.max_gpus)
 
-def optimus(jobs, total_gpus):
+def optimus(jobs, total_gpus, state):
     for m in jobs:
         m.gpus = 0
 
@@ -177,7 +430,7 @@ def optimus(jobs, total_gpus):
     for m in jobs:
         m.schedule(m.gpus)
 
-def heuristic(jobs, total_gpus):
+def heuristic(jobs, total_gpus, state):
     remain = INF
     shortest = None
     for i, m in enumerate(jobs):
@@ -197,7 +450,7 @@ def heuristic(jobs, total_gpus):
     for i, m in enumerate(js):
         m.schedule(alloc_list[i])
 
-def max_speedup(jobs, total_gpus):
+def max_speedup(jobs, total_gpus, state):
     js = [m for m in jobs]
     for m in js:
         m.gpus = 0
@@ -216,7 +469,7 @@ def max_speedup(jobs, total_gpus):
     for m in jobs:
         m.schedule(m.gpus)
 
-def opt_gs(jobs, total_gpus):
+def opt_gs(jobs, total_gpus, state):
     def g(m):
         return (m.speedup(m.gpus + 1) - m.speedup(m.gpus))/m.speedup(m.max_gpus)
 
@@ -237,7 +490,63 @@ def opt_gs(jobs, total_gpus):
     for m in jobs:
         m.schedule(m.gpus)
 
-def opt_2jobs(jobs, total_gpus):
+def opt_2jobs_helper(jobs, total_gpus):
+    js = [m for m in jobs]
+    for m in js:
+        m.gpus = 0
+    gpus = total_gpus
+    while gpus > 0 and len(js) > 0:
+        cand = js[0]
+        for m in js[1:]:
+            if m.finish_time() < cand.finish_time():
+                l = m
+                h = cand
+            else:
+                l = cand
+                h = m
+            lg = l.gpus
+            hg = h.gpus
+            mlg = min(l.max_gpus, total_gpus)
+            mhg = min(h.max_gpus, total_gpus)
+            if l.remain(lg) < h.remain(hg + 1):
+                if (l.throughput(lg)/(l.throughput(lg + 1) - l.throughput(lg))) <= \
+                    (h.throughput(hg + 1)/(h.throughput(hg + 1) - h.throughput(hg))):
+                    cand = l
+                else:
+                    cand = h
+            elif (1/l.remain(lg + 1) - 1/l.remain(lg)) > (1/h.remain(hg + 1) - 1/h.remain(hg)):
+                cand = l
+            else:
+                cand = h
+        cand.gpus += 1
+        if cand.gpus == cand.max_gpus:
+            js.remove(cand)
+        gpus -= 1
+    return [m.gpus for m in jobs]
+
+def opt_2jobs_test(jobs, total_gpus, state):
+    remain_dict = {m: m.remain_iter for m in jobs}
+    gpus_dict = {m: [] for m in jobs}
+    js = [m for m in jobs]
+    order = []
+    while len(js) > 0:
+        share = opt_2jobs_helper(js, total_gpus)
+        for g, m in zip(share, js):
+            gpus_dict[m].append(g)
+        idx, t = argmin(js,
+                key=lambda m: remain_dict[m] * m.time_per_iter(gpus_dict[m][-1]))
+        order.append(js[idx])
+        del js[idx]
+        for m in js:
+            remain_dict[m] -= int(t / m.time_per_iter(gpus_dict[m][-1]))
+    shares = []
+    for i in range(len(jobs)):
+        shares.append([gpus_dict[m][i] for m in order[i:]])
+    log('%d,%f' % (jobs[0].current_time, calc_sum_jct(order, shares)))
+    for g, m in zip(shares[0], order):
+        m.schedule(g)
+
+def opt_2jobs(jobs, total_gpus, state):
     js = [m for m in jobs]
     for m in js:
         m.gpus = 0
@@ -272,7 +581,89 @@ def opt_2jobs(jobs, total_gpus):
     for m in jobs:
         m.schedule(m.gpus)
 
-def opt_tsgs(jobs, total_gpus):
+def opt_tsgs_new(jobs, total_gpus, state):
+    def g(m):
+        return 1 - m.throughput(m.gpus)/m.throughput(m.max_gpus)
+
+    def remain(m, s):
+        sr = s.remain(s.gpus)
+        int(sr)
+        it = m.remain_iter - int(sr / m.time_per_iter(m.gpus))
+        return sr + it / m.throughput(m.max_gpus)
+
+    gpus = 0
+    min_m = None
+    min_r = INF
+    for m in jobs:
+        m.gpus = m.max_gpus
+        gpus += m.max_gpus
+        r = m.remain(m.gpus - 1) - m.remain(m.gpus)
+        if r < min_r:
+            min_m = m
+            min_r = r
+
+    if gpus <= total_gpus + 1:
+        if gpus == total_gpus + 1:
+            min_m.gpus -= 1
+            gpus -= 1
+        for m in jobs:
+            m.schedule(m.gpus)
+        return
+
+    min_r = INF
+    min_m = None
+    for m in jobs:
+        r = m.remain(m.gpus)
+        if r < min_r:
+            min_r = r
+            min_m = m
+    js = sorted(jobs, key=lambda m: remain(m, min_m))
+
+    while gpus > total_gpus:
+        costs = []
+        #
+        s = js[0]
+        remains = [remain(m, s) for m in js]
+        sr = remains[0]
+        diff = s.remain(s.gpus - 1) - sr
+        cost = diff
+        for i in range(1, len(js)):
+            u = js[i]
+            ur = remains[i]
+            d = diff * g(u)
+            d = min(ur + d, u.remain(u.gpus)) - ur
+            cost += d
+        costs.append(cost)
+        for k in range(1, len(js)):
+            j = js[k]
+            diff = sr * (j.throughput(j.gpus) - j.throughput(j.gpus - 1)) / j.throughput(j.max_gpus)
+            cost = diff
+            for i in range(k + 1, len(js)):
+                u = js[i]
+                ur = remains[i]
+                d = diff * g(u)
+                d = min(ur + d, u.remain(u.gpus)) - ur
+                cost += d
+            costs.append(cost)
+
+        for i, c in sorted(enumerate(costs), key=lambda t: t[1]):
+            if js[i].gpus > 0:
+                js[i].gpus -= 1
+                break
+        gpus -= 1
+        min_r = INF
+        min_m = None
+        for m in jobs:
+            r = m.remain(m.gpus)
+            if r < min_r:
+                min_r = r
+                min_m = m
+        js = sorted(js, key=lambda m: remain(m, min_m))
+
+    for m in jobs:
+        m.schedule(m.gpus)
+
+def opt_tsgs(jobs, total_gpus, state):
     def g(m):
         return (m.throughput(m.gpus + 1) - m.throughput(m.gpus))/m.throughput(m.max_gpus)
     
