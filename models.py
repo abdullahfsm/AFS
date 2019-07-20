@@ -61,7 +61,11 @@ class Model(object):
             return 0
         return self.current_time - self.evicted_time
 
-    def time_per_iter(self, num_gpus):
+    @property
+    def total_runtime(self):
+        return self.current_time - self.arrival_time
+
+    def tpi(self, num_gpus):
         if num_gpus <= 0:
             return INF
         return self.times_per_iter[num_gpus - 1]
@@ -127,6 +131,8 @@ class Model(object):
             else:
                 # Still has remaining iterations
                 self.remain_iter -= proced_iter
+                if self.remain_iter == 1:
+                    self.remain_iter = 0
                 self.current_time = time
             if self.init_sched_time == INF:
                 self.init_sched_time = time

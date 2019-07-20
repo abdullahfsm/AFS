@@ -1,5 +1,6 @@
 import sys
 import time
+import io
 import numpy as np
 from collections import OrderedDict
 
@@ -7,6 +8,7 @@ import algs
 from models import *
 
 NO_LOG = False
+PRINT_PROG = False
 NUM_SIM = 1
 
 MODEL_POOL = [
@@ -60,6 +62,8 @@ class Scheduler(object):
         self.current_trace_idx = 0
         self.state = OrderedDict()
         self.assign = algs.__dict__[alg]
+        if PRINT_PROG:
+            self.prog_file = io.open('prog_%s.csv' % alg, 'w')
 
     def continue_until_next_event(self):
         # Check the nearest event from unfinished jobs
@@ -93,7 +97,12 @@ class Scheduler(object):
                 self.finished.append(m)
                 log('%s, SumJCT %.1f %d' % \
                         (m.finish_info(),
-                        sum([m.current_time - m.arrival_time for m in self.finished]),
+                        sum([m.total_runtime for m in self.finished]),
+                        len(self.unfinished)))
+                if PRINT_PROG:
+                    self.prog_file.write('%d,%.1f,%d\n' % \
+                        (self.current_time,
+                        sum([m.total_runtime for m in self.finished]),
                         len(self.unfinished)))
             else:
                 unfinished.append(m)
@@ -128,7 +137,7 @@ def run_sim(alg, num_gpus, trace):
         ret = INF
     else:
         assert(len(sched.finished) == num_models)
-        sum_elapsed = sum([m.current_time - m.arrival_time for m in sched.finished])
+        sum_elapsed = sum([m.total_runtime for m in sched.finished])
         avg_elapsed = sum_elapsed / num_models
         # sys.stderr.write('=== Alg: %s ===\n' % alg)
         # sys.stderr.write('Avg JCT:       %.2f\n' % (sched.avg_elapsed()/3600.))
@@ -136,6 +145,7 @@ def run_sim(alg, num_gpus, trace):
         # sys.stderr.write('Avg run time:  %.2f\n' % ((sched.avg_elapsed() - sched.avg_wait())/3600.))
         # sys.stderr.write('Makespan:      %.2f\n' % (sched.timestamp/3600.))
         ret = avg_elapsed/3600.
+    log('')
     print('%.6f,' % ret, end='')
     return ret
 

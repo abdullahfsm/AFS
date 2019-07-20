@@ -29,13 +29,20 @@ def round_robin(request_list, total_amount):
                     break
     return assign_list, total_amount
 
-def argmax(seq):
+def argmax(seq, key=None):
     val = -INF
     idx = None
-    for i, v in enumerate(seq):
-        if v > val:
-            val = v
-            idx = i
+    if key is None:
+        for i, v in enumerate(seq):
+            if v > val:
+                val = v
+                idx = i
+    else:
+        for i, v in enumerate(seq):
+            this_val = key(v)
+            if this_val > val:
+                val = this_val
+                idx = i
     return idx, val
 
 def argmin(seq, key=None):
@@ -90,7 +97,7 @@ def calc_jcts(js, shares):
         for i in range(j):
             jct += ts[i]
             remain -= int(ts[i] * m.throughput(share[i]))
-        t = remain * m.time_per_iter(share[j])
+        t = remain * m.tpi(share[j])
         jct += t
         jcts.append(jct)
         ts.append(t)
@@ -109,7 +116,7 @@ def calc_sum_jct(js, shares):
         for i in range(j):
             jct += ts[i]
             remain -= int(ts[i] * m.throughput(share[i]))
-        t = remain * m.time_per_iter(share[j])
+        t = remain * m.tpi(share[j])
         jct += t
         sum_jct += jct
         ts.append(t)
@@ -196,11 +203,11 @@ def max_min_test(jobs, total_gpus, state):
         for g, m in zip(share, js):
             gpus_dict[m].append(g)
         idx, t = argmin(js,
-                key=lambda m: remain_dict[m] * m.time_per_iter(gpus_dict[m][-1]))
+                key=lambda m: remain_dict[m] * m.tpi(gpus_dict[m][-1]))
         order.append(js[idx])
         del js[idx]
         for m in js:
-            remain_dict[m] -= int(t / m.time_per_iter(gpus_dict[m][-1]))
+            remain_dict[m] -= int(t / m.tpi(gpus_dict[m][-1]))
     shares = []
     for i in range(len(jobs)):
         shares.append([gpus_dict[m][i] for m in order[i:]])
@@ -241,10 +248,10 @@ def brute_force(jobs, total_gpus, state):
         if n == 1:
             g = min(total, jobs[0].max_gpus)
             curs[0] = g
-            yield iters[0] * jobs[0].time_per_iter(g)
+            yield iters[0] * jobs[0].tpi(g)
         else:
             for _ in gen_dist_helper(curs, mins, reqs, total, 0):
-                tpis = [jobs[i].time_per_iter(curs[i]) for i in range(n)]
+                tpis = [jobs[i].tpi(curs[i]) for i in range(n)]
                 min_t = INF
                 min_idx = -1
                 for idx, t in enumerate((iters[i] * tpis[i] for i in range(n))):
@@ -452,11 +459,11 @@ def opt_2jobs_test(jobs, total_gpus, state):
         for g, m in zip(share, js):
             gpus_dict[m].append(g)
         idx, t = argmin(js,
-                key=lambda m: remain_dict[m] * m.time_per_iter(gpus_dict[m][-1]))
+                key=lambda m: remain_dict[m] * m.tpi(gpus_dict[m][-1]))
         order.append(js[idx])
         del js[idx]
         for m in js:
-            remain_dict[m] -= int(t / m.time_per_iter(gpus_dict[m][-1]))
+            remain_dict[m] -= int(t / m.tpi(gpus_dict[m][-1]))
     shares = []
     for i in range(len(jobs)):
         shares.append([gpus_dict[m][i] for m in order[i:]])
