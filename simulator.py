@@ -20,7 +20,6 @@ MODEL_POOL = [
     VideopredictionModel64
 ]
 ALGS = [
-    # 'brute_force_ne',
     # 'srtf_ne',
     # 'srsf_ne',
     # 'srtf_relaxed',
@@ -29,9 +28,6 @@ ALGS = [
     'optimus',
     'max_speedup',
     'opt_2jobs',
-    'opt_gs',
-    'opt_tsgs',
-    'opt_tsgs_new',
     'opt_boundary',
     'opt_greedy',
     'brute_force',

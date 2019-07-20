@@ -214,47 +214,6 @@ def max_min(jobs, total_gpus, state):
     for i, m in enumerate(jobs):
         m.schedule(alloc_list[i])
 
-def brute_force_ne(jobs, total_gpus, state):
-    num = len(jobs)
-    orders = permutations(range(num), num)
-    min_sum_jct = INF
-    min_order = None
-    for order in orders:
-        remains = [m.remain(m.max_gpus) for m in jobs]
-        sum_jct = 0
-        order_copy = [o for o in order]
-        for i in range(num):
-            min_remain = INF
-            min_idx = -1
-            slot = []
-            gpus = total_gpus
-            for idx in order_copy:
-                m = jobs[idx]
-                if gpus < m.max_gpus:
-                    continue
-                gpus -= m.max_gpus
-                r = remains[idx]
-                if r < min_remain:
-                    min_remain = r
-                    min_idx = idx
-                slot.append(idx)
-            for idx in slot:
-                remains[idx] -= min_remain
-            order_copy.remove(min_idx)
-            sum_jct += min_remain * (num - i)
-        if sum_jct < min_sum_jct:
-            min_sum_jct = sum_jct
-            min_order = order
-
-    gpus = total_gpus
-    for idx in min_order:
-        m = jobs[idx]
-        if gpus < m.max_gpus:
-            m.schedule(0)
-        else:
-            gpus -= m.max_gpus
-            m.schedule(m.max_gpus)
-
 def brute_force(jobs, total_gpus, state):
     def gen_dist_helper(curs, mins, reqs, total, idx):
         if idx < len(curs) - 1:
@@ -430,26 +389,6 @@ def optimus(jobs, total_gpus, state):
     for m in jobs:
         m.schedule(m.gpus)
 
-def heuristic(jobs, total_gpus, state):
-    remain = INF
-    shortest = None
-    for i, m in enumerate(jobs):
-        r = m.remain(min(m.max_gpus, total_gpus))
-        if r < remain:
-            shortest = m
-            remain = r
-
-    g = min(shortest.max_gpus, total_gpus)
-    shortest.schedule(g)
-    gpus = total_gpus - g
-
-    js = [j for j in jobs if not j is shortest]
-
-    req_list = [m.max_gpus for m in js]
-    alloc_list, _ = round_robin(req_list, gpus)
-    for i, m in enumerate(js):
-        m.schedule(alloc_list[i])
-
 def max_speedup(jobs, total_gpus, state):
     js = [m for m in jobs]
     for m in js:
@@ -460,27 +399,6 @@ def max_speedup(jobs, total_gpus, state):
         for m in js[1:]:
             if m.speedup(m.gpus + 1) - m.speedup(m.gpus) > \
                     cand.speedup(cand.gpus + 1) - cand.speedup(cand.gpus):
-                cand = m
-        cand.gpus += 1
-        if cand.gpus == cand.max_gpus:
-            js.remove(cand)
-        gpus -= 1
-
-    for m in jobs:
-        m.schedule(m.gpus)
-
-def opt_gs(jobs, total_gpus, state):
-    def g(m):
-        return (m.speedup(m.gpus + 1) - m.speedup(m.gpus))/m.speedup(m.max_gpus)
-
-    js = [m for m in jobs]
-    for m in js:
-        m.gpus = 0
-    gpus = total_gpus
-    while gpus > 0 and len(js) > 0:
-        cand = js[0]
-        for m in js[1:]:
-            if g(m) > g(cand):
                 cand = m
         cand.gpus += 1
         if cand.gpus == cand.max_gpus:
@@ -578,137 +496,6 @@ def opt_2jobs(jobs, total_gpus, state):
         if cand.gpus == cand.max_gpus:
             js.remove(cand)
         gpus -= 1
-    for m in jobs:
-        m.schedule(m.gpus)
-
-def opt_tsgs_new(jobs, total_gpus, state):
-    def g(m):
-        return 1 - m.throughput(m.gpus)/m.throughput(m.max_gpus)
-
-    def remain(m, s):
-        sr = s.remain(s.gpus)
-        int(sr)
-        it = m.remain_iter - int(sr / m.time_per_iter(m.gpus))
-        return sr + it / m.throughput(m.max_gpus)
-
-    gpus = 0
-    min_m = None
-    min_r = INF
-    for m in jobs:
-        m.gpus = m.max_gpus
-        gpus += m.max_gpus
-        r = m.remain(m.gpus - 1) - m.remain(m.gpus)
-        if r < min_r:
-            min_m = m
-            min_r = r
-
-    if gpus <= total_gpus + 1:
-        if gpus == total_gpus + 1:
-            min_m.gpus -= 1
-            gpus -= 1
-        for m in jobs:
-            m.schedule(m.gpus)
-        return
-
-    min_r = INF
-    min_m = None
-    for m in jobs:
-        r = m.remain(m.gpus)
-        if r < min_r:
-            min_r = r
-            min_m = m
-    js = sorted(jobs, key=lambda m: remain(m, min_m))
-
-    while gpus > total_gpus:
-        costs = []
-        #
-        s = js[0]
-        remains = [remain(m, s) for m in js]
-        sr = remains[0]
-        diff = s.remain(s.gpus - 1) - sr
-        cost = diff
-        for i in range(1, len(js)):
-            u = js[i]
-            ur = remains[i]
-            d = diff * g(u)
-            d = min(ur + d, u.remain(u.gpus)) - ur
-            cost += d
-        costs.append(cost)
-        for k in range(1, len(js)):
-            j = js[k]
-            diff = sr * (j.throughput(j.gpus) - j.throughput(j.gpus - 1)) / j.throughput(j.max_gpus)
-            cost = diff
-            for i in range(k + 1, len(js)):
-                u = js[i]
-                ur = remains[i]
-                d = diff * g(u)
-                d = min(ur + d, u.remain(u.gpus)) - ur
-                cost += d
-            costs.append(cost)
-
-        for i, c in sorted(enumerate(costs), key=lambda t: t[1]):
-            if js[i].gpus > 0:
-                js[i].gpus -= 1
-                break
-        gpus -= 1
-        min_r = INF
-        min_m = None
-        for m in jobs:
-            r = m.remain(m.gpus)
-            if r < min_r:
-                min_r = r
-                min_m = m
-        js = sorted(js, key=lambda m: remain(m, min_m))
-
-    for m in jobs:
-        m.schedule(m.gpus)
-
-def opt_tsgs(jobs, total_gpus, state):
-    def g(m):
-        return (m.throughput(m.gpus + 1) - m.throughput(m.gpus))/m.throughput(m.max_gpus)
-    
-    def t0g0(js):
-        s = js[0]
-        st = s.remain(s.gpus)
-        for m in js[1:]:
-            mt = m.remain(m.gpus)
-            if mt < st:
-                s = m
-                st = mt
-        return st * (len(js) - sum([m.throughput(m.gpus)/m.throughput(m.max_gpus) for m in js]))
-
-    js = [m for m in jobs]
-    for m in js:
-        m.gpus = 0
-    gpus = total_gpus
-    while gpus > 0 and len(js) > 0:
-        cand = js[0]
-        for m in js[1:]:
-            if g(m) > g(cand):
-                cand = m
-        cand.gpus += 1
-        if cand.gpus == cand.max_gpus:
-            js.remove(cand)
-        gpus -= 1
-
-    x = t0g0(jobs)
-    for m0, m1 in permutations(jobs, 2):
-        if m0.gpus >= m0.max_gpus or m1.gpus <= 0:
-            continue
-        m0.gpus += 1
-        m1.gpus -= 1
-        y = t0g0(jobs)
-        while y < x:
-            # log('%.1f, %s' % (y, str([m.gpus for m in jobs])))
-            m0.gpus += 1
-            m1.gpus -= 1
-            if m0.gpus > m0.max_gpus or m1.gpus < 0:
-                break
-            x = y
-            y = t0g0(jobs)
-        m0.gpus -= 1
-        m1.gpus += 1
-
     for m in jobs:
         m.schedule(m.gpus)
 
