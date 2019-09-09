@@ -505,6 +505,27 @@ def opt_2jobs(jobs, total_gpus, state):
     for m in jobs:
         m.schedule(m.gpus)
 
+def opt_pp(jobs, total_gpus, state):
+    def fac(m):
+        return m.throughput(m.gpus + 1) * m.rdp(m.gpus)
+
+    js = [m for m in jobs]
+    for m in js:
+        m.gpus = 0
+    gpus = total_gpus
+    while gpus > 0 and len(js) > 0:
+        cand = js[0]
+        for m in js[1:]:
+            if fac(m) <= fac(cand):
+                cand = m
+        cand.gpus += 1
+        if cand.gpus == cand.max_gpus:
+            js.remove(cand)
+        gpus -= 1
+
+    for m in jobs:
+        m.schedule(m.gpus)
+
 def tiresias_las(jobs, total_gpus, thres=2*3600, starving_timeout=None):
     """Tiresias-LAS"""
     gpus = total_gpus
