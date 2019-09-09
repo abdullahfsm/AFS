@@ -298,17 +298,21 @@ def opt_greedy(jobs, total_gpus, state):
         m.schedule(min_share[i])
 
 def opt_boundary(jobs, total_gpus, state):
-    if not jobs[-1].just_arrived:
-        # jobs finished
-        n = len(jobs)
-        del state[0][:-n]
-        del state[1][:-n]
-        for g, j in zip(state[0][0], state[1]):
-            j.schedule(g)
-        # try:
-        #     log('%d,%f' % (j.current_time, calc_sum_jct(state[1], state[0])))
-        # except:
-        #     raise Exception('Invalid share:\n%s\n%s' % (str(state[1]), str(state[0])))
+    # if not jobs[-1].just_arrived:
+    #     # jobs finished
+    #     n = len(jobs)
+    #     del state[0][:-n]
+    #     del state[1][:-n]
+    #     for g, j in zip(state[0][0], state[1]):
+    #         j.schedule(g)
+    #     # try:
+    #     #     log('%d,%f' % (j.current_time, calc_sum_jct(state[1], state[0])))
+    #     # except:
+    #     #     raise Exception('Invalid share:\n%s\n%s' % (str(state[1]), str(state[0])))
+    #     return
+    if sum([m.max_gpus for m in jobs]) <= total_gpus:
+        for m in jobs:
+            m.schedule(m.max_gpus)
         return
 
     for m in jobs:
@@ -332,7 +336,7 @@ def opt_boundary(jobs, total_gpus, state):
 
     js = sorted(jobs, key=lambda m: m.remain(m.gpus))
     shares = opt_r(js, total_gpus)
-    for x in range(len(jobs)):
+    for x in range(3):
         jcts = calc_jcts(js, shares)
         jcts, new_js = zip(*sorted(zip(jcts, js), key=lambda t: t[0]))
         is_equal = True
@@ -350,8 +354,8 @@ def opt_boundary(jobs, total_gpus, state):
 
     for i, m in enumerate(js):
         m.schedule(share[i])
-    state[0] = shares
-    state[1] = js
+    # state[0] = shares
+    # state[1] = js
 
 def srtf_ne(jobs, total_gpus, state):
     srtf_sorted = sorted(jobs, key=lambda m: m.remain(m.max_gpus))
