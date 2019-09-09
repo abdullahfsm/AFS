@@ -11,6 +11,9 @@ class Model(object):
         self.total_iter = int(total_iter * _SCALE_TOTAL_ITER)
         self.times_per_iter = times_per_iter
         self.throughputs = [1 / float(t) for t in times_per_iter]
+        self.dps = [self.throughputs[0]] + [self.throughputs[i+1] - self.throughputs[i]
+            for i in range(len(self.throughputs)-1)]
+        self.rdps = [1/dp if dp != 0 else INF for dp in self.dps]
         self.speedups = [times_per_iter[0] / float(t) for t in times_per_iter]
 
         # Number of iterations remaining
@@ -73,7 +76,13 @@ class Model(object):
     def throughput(self, num_gpus):
         if num_gpus <= 0:
             return 0
-        return 1 / self.times_per_iter[num_gpus - 1]
+        return self.throughputs[num_gpus - 1]
+
+    def dp(self, num_gpus):
+        return self.dps[num_gpus]
+
+    def rdp(self, num_gpus):
+        return self.rdps[num_gpus]
 
     def speedup(self, num_gpus):
         if num_gpus <= 0:

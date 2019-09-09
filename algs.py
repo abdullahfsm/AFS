@@ -145,7 +145,7 @@ def opt_r(js, total_gpus):
             r = rmap[i][0]
             # print(rmap, end=',')
             if r < j.max_gpus:
-                max_gain = fac * (1 - j.throughput(r) / j.throughput(r + 1))
+                max_gain = fac * (1 - j.throughput(r) * j.tpi(r + 1))
                 max_k = i
                 # rmap[i][0] += 1
                 # print('JCT(%s) %.1f, ' % (str(rmap), calc_sum_jct(js, rmap)), end='')
@@ -161,7 +161,7 @@ def opt_r(js, total_gpus):
                 r = rmap[i][k - i]
                 if r >= j.max_gpus:
                     continue
-                gain = facs[k] * (j.throughput(r + 1) - j.throughput(r)) / j.throughput(rmap[k][0])
+                gain = facs[k] * (j.throughput(r + 1) - j.throughput(r)) * j.tpi(rmap[k][0])
                 if gain > max_gain:
                     max_gain = gain
                     max_k = k
@@ -490,12 +490,11 @@ def opt_2jobs(jobs, total_gpus, state):
             mlg = min(l.max_gpus, total_gpus)
             mhg = min(h.max_gpus, total_gpus)
             if l.remain(lg) < h.remain(hg + 1):
-                if (l.throughput(lg)/(l.throughput(lg + 1) - l.throughput(lg))) <= \
-                    (h.throughput(hg + 1)/(h.throughput(hg + 1) - h.throughput(hg))):
+                if l.throughput(lg) * l.rdp(lg) <= h.throughput(hg+1) * h.rdp(hg):
                     cand = l
                 else:
                     cand = h
-            elif (1/l.remain(lg + 1) - 1/l.remain(lg)) > (1/h.remain(hg + 1) - 1/h.remain(hg)):
+            elif l.dp(lg)/l.remain_iter > h.dp(hg)/h.remain_iter:
                 cand = l
             else:
                 cand = h
