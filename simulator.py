@@ -1,14 +1,17 @@
 import sys
 import time
 import io
+import pickle
 import numpy as np
+import matplotlib.pyplot as plt
 from collections import OrderedDict
 
 import algs
 from models import *
 
-NO_LOG = False
+NO_LOG = True
 PRINT_PROG = False
+PRINT_PLOT = True
 NUM_SIM = 1
 
 MODEL_POOL = [
@@ -22,17 +25,18 @@ MODEL_POOL = [
     VideopredictionModel64
 ]
 ALGS = [
-    # 'srtf_ne',
-    # 'srsf_ne',
+    'srtf_ne',
+    'srsf_ne',
     # 'srtf_relaxed',
     # 'tiresias_las',
-    'max_min',
+    # 'max_min',
     'optimus',
-    'max_speedup',
+    # 'max_speedup',
+    'opt_pp',
     'opt_2jobs',
     'opt_boundary',
-    'opt_greedy',
-    'brute_force',
+    # 'opt_greedy',
+    # 'brute_force',
 ]
 INF = float('inf')
 
@@ -62,6 +66,8 @@ class Scheduler(object):
         self.current_trace_idx = 0
         self.state = OrderedDict()
         self.assign = algs.__dict__[alg]
+        self.alg = alg
+        self.prog_data = []
         if PRINT_PROG:
             self.prog_file = io.open('prog_%s.csv' % alg, 'w')
 
@@ -74,6 +80,7 @@ class Scheduler(object):
         # Check the nearest job arrival event
         if self.current_trace_idx < len(self.trace):
             arrival_time, model = self.trace[self.current_trace_idx]
+            assert(arrival_time != INF)
         else:
             arrival_time = INF
         # Continue until the nearest event occurs
@@ -83,29 +90,38 @@ class Scheduler(object):
         else:
             next_event_time = arrival_time
             arrival = True
+        if next_event_time == INF:
+            raise RuntimeError('Algorithm %s scheduled no jobs even though '
+                               '%d waiting job(s) exist.' % (self.alg, len(self.unfinished)))
         next_event_time = int(next_event_time + 0.999999)
         if next_event_time == self.current_time:
             next_event_time += 1
         elif next_event_time < self.current_time:
             next_event_time = self.current_time
         # print('NEXT_EVENT: %f, ARRIVAL: %f' % (next_event_time, arrival_time))
+        new_finished = []
         unfinished = []
         for m in self.unfinished:
             # Add very little amount of time to surely trigger the event
             m.continue_until(next_event_time)
             if m.is_finished:
+                new_finished.append(m)
                 self.finished.append(m)
-                log('%s, SumJCT %.1f %d' % \
-                        (m.finish_info(),
-                        sum([m.total_runtime for m in self.finished]),
-                        len(self.unfinished)))
-                if PRINT_PROG:
-                    self.prog_file.write('%d,%.1f,%d\n' % \
-                        (self.current_time,
-                        sum([m.total_runtime for m in self.finished]),
-                        len(self.unfinished)))
             else:
                 unfinished.append(m)
+        if new_finished:
+            prog_data = (self.current_time,
+                sum([m.total_runtime for m in self.finished])/float(len(self.finished)),
+                len(unfinished),
+                max([m.total_runtime for m in unfinished]) if unfinished else 0)
+        if PRINT_PROG:
+            for m in new_finished:
+                self.prog_file.write('%d,%.1f,%d,%.1f\n' % prog_data)
+        if PRINT_PLOT:
+            for m in new_finished:
+                self.prog_data.append(prog_data)
+        for m in new_finished:
+            log('%s, %s' % (m.finish_info(), str(prog_data)))
         self.unfinished = unfinished
         self.current_time = next_event_time
         # Add the next job if this is a job arrival event
@@ -147,7 +163,7 @@ def run_sim(alg, num_gpus, trace):
         ret = avg_elapsed/3600.
     log('')
     print('%.6f,' % ret, end='')
-    return ret
+    return ret, sched.prog_data
 
 def print_usage():
     print('usage: python3 simulator.py NUM_GPUS NUM_MODELS AVG_INTV\n'
@@ -166,11 +182,56 @@ if __name__ == '__main__':
     wins = [0] * len(ALGS)
     for n in range(NUM_SIM):
         tr = Trace(MODEL_POOL, avg_interval, num_models)
-        rets = [run_sim(a, num_gpus, tr.trace) for a in ALGS]
+        rets = []
+        if PRINT_PLOT:
+            fig, [ax_act, ax_qlen, ax_msoj] = plt.subplots(3, 1, sharex=True)
+        last_time = 0
+        prog_data_ctime_list = []
+        prog_data_act_list = []
+        prog_data_qlen_list = []
+        prog_data_msoj_list = []
+        for a in ALGS:
+            ret, prog_data = run_sim(a, num_gpus, tr.trace)
+            rets.append(ret)
+            if PRINT_PLOT:
+                prog_data_ctime = []
+                prog_data_act = []
+                prog_data_qlen = []
+                prog_data_msoj = []
+                for ctime, act, qlen, msoj in prog_data:
+                    prog_data_ctime.append(ctime/3600./24.)
+                    prog_data_act.append(act/3600.)
+                    prog_data_qlen.append(qlen)
+                    prog_data_msoj.append(msoj/3600.)
+                prog_data_ctime_list.append(prog_data_ctime)
+                prog_data_act_list.append(prog_data_act)
+                prog_data_qlen_list.append(prog_data_qlen)
+                prog_data_msoj_list.append(prog_data_msoj)
+                last_time = max(last_time, prog_data_ctime[-1])
+        for i, a in enumerate(ALGS):
+            prog_data_ctime_list[i].append(last_time)
+            prog_data_act_list[i].append(prog_data_act_list[i][-1])
+            prog_data_qlen_list[i].append(prog_data_qlen_list[i][-1])
+            prog_data_msoj_list[i].append(prog_data_msoj_list[i][-1])
+            ax_act.plot(prog_data_ctime_list[i], prog_data_act_list[i], label=a)
+            ax_qlen.plot(prog_data_ctime_list[i], prog_data_qlen_list[i], label=a)
+            ax_msoj.plot(prog_data_ctime_list[i], prog_data_msoj_list[i], label=a)
         min_ret = min(rets)
         for i, r in enumerate(rets):
             if abs(r - min_ret) < 1e-4:
                 wins[i] += 1
+        if PRINT_PLOT:
+            ax_act.set_ylabel('ACT (hour)')
+            ax_qlen.set_ylabel('Queue Length')
+            ax_msoj.set_ylabel('Max Sojourn Time (hour)')
+            for ax in [ax_act, ax_qlen, ax_msoj]:
+                ax.grid(alpha=.3, linestyle='--')
+                ax.set_xlim(0, last_time)
+            plt.xlabel('Time (day)')
+            ax_act.legend(loc='upper left')
+            plt.show()
+            with io.open('plot_%d.pkl' % time.time(), 'wb') as f:
+                pickle.dump((ax_act, ax_qlen, ax_msoj), f)
         print('')
     print('\n== Result ==')
     for i, a in enumerate(ALGS):
