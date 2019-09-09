@@ -4,10 +4,10 @@ INF = float('inf')
 _SCALE_TOTAL_ITER = 0.1
 
 class Model(object):
-    def __init__(self, name, arrival_time, total_iter, times_per_iter):
+    def __init__(self, name, total_iter, times_per_iter):
         # Constants
         self.name = name
-        self.arrival_time = arrival_time
+        self.arrival_time = 0
         self.total_iter = int(total_iter * _SCALE_TOTAL_ITER)
         self.times_per_iter = times_per_iter
         self.throughputs = [1 / float(t) for t in times_per_iter]
@@ -21,9 +21,9 @@ class Model(object):
         # Number of GPUs currently allocated
         self.gpus = 0
         # Current absolute time
-        self.current_time = arrival_time
+        self.current_time = 0
         # The recent absolute time when is alloced zero GPU
-        self.evicted_time = arrival_time
+        self.evicted_time = 0
         # The recent absolute time when is alloced one or more GPUs
         self.preempted_time = 0
         # How long has this model been evicted since arrival
@@ -67,6 +67,21 @@ class Model(object):
     @property
     def total_runtime(self):
         return self.current_time - self.arrival_time
+
+    def submit(self, arrival_time, max_gpus=None, length=None):
+        self.arrival_time = arrival_time
+        self.current_time = arrival_time
+        self.evicted_time = arrival_time
+        if max_gpus is not None and max_gpus < self.max_gpus:
+            self.times_per_iter = self.times_per_iter[:max_gpus]
+            self.throughputs = self.throughputs[:max_gpus]
+            self.speedups = self.speedups[:max_gpus]
+        if length is not None:
+            self.total_iter = int(length / self.times_per_iter[-1])
+            if self.total_iter == 0:
+                self.total_iter = 1
+        self.remain_iter = self.total_iter
+        return self
 
     def tpi(self, num_gpus):
         if num_gpus <= 0:
@@ -174,8 +189,8 @@ class Model(object):
 ################################################################################
 
 class FacenetModel64(Model):
-    def __init__(self, start_time):
-        super(FacenetModel64, self).__init__('FaceNetModel64', start_time,
+    def __init__(self):
+        super(FacenetModel64, self).__init__('FaceNetModel64',
                 45000000 // 64,
                 # [0.2476, 0.1641, 0.1324, 0.1229])
                 [0.2476, 0.1850, 0.1477, 0.1230])
@@ -183,8 +198,8 @@ class FacenetModel64(Model):
         self.first_iter_time = 15.8114
 
 class FacenetModel128(Model):
-    def __init__(self, start_time):
-        super(FacenetModel128, self).__init__('FaceNetModel128', start_time,
+    def __init__(self):
+        super(FacenetModel128, self).__init__('FaceNetModel128',
                 45000000 // 128,
                 [0.4357, 0.2595, 0.1959, 0.1627,
                  0.1484, 0.1403, 0.1363, 0.1284])
@@ -192,8 +207,8 @@ class FacenetModel128(Model):
         self.first_iter_time = 15.8114
 
 class FacenetModel256(Model):
-    def __init__(self, start_time):
-        super(FacenetModel256, self).__init__('FaceNetModel256', start_time,
+    def __init__(self):
+        super(FacenetModel256, self).__init__('FaceNetModel256',
                 45000000 // 256,
                 [0.9000, 0.4499, 0.3235, 0.2614,
                  0.2259, 0.1978, 0.1794, 0.1650,
@@ -202,8 +217,8 @@ class FacenetModel256(Model):
         self.first_iter_time = 15.8114
 
 class VggnetModel256(Model):
-    def __init__(self, start_time):
-        super(VggnetModel256, self).__init__('VggnetModel256', start_time,
+    def __init__(self):
+        super(VggnetModel256, self).__init__('VggnetModel256',
                 153740040 // 256,
                 # [2.8591, 2.1769, 1.4946, 0.8124,
                 #  0.7849, 0.7574, 0.7299, 0.7024,
@@ -217,8 +232,8 @@ class VggnetModel256(Model):
         self.first_iter_time = 3.5694
 
 class GooglenetModel128(Model):
-    def __init__(self, start_time):
-        super(GooglenetModel128, self).__init__('GooglenetModel128', start_time,
+    def __init__(self):
+        super(GooglenetModel128, self).__init__('GooglenetModel128',
                 153740040 // 128,
                 # [0.3631,  0.1908,  0.1384,  0.1074,
                 #  0.09246, 0.08308, 0.07820, 0.06242,
@@ -234,8 +249,8 @@ class GooglenetModel128(Model):
         self.first_iter_time = 3.2041
 
 class Inception4Model256(Model):
-    def __init__(self, start_time):
-        super(Inception4Model256, self).__init__('Inception4Model256', start_time,
+    def __init__(self):
+        super(Inception4Model256, self).__init__('Inception4Model256',
                 153740040 // 256,
                 # [5.5325, 2.8125, 1.8716, 1.4081,
                 #  1.1203, 0.9443, 0.8087, 0.7084,
@@ -261,8 +276,8 @@ class Inception4Model256(Model):
         self.first_iter_time = 7.4958
 
 class Resnet50Model128(Model):
-    def __init__(self, start_time):
-        super(Resnet50Model128, self).__init__('Resnet50Model128', start_time,
+    def __init__(self):
+        super(Resnet50Model128, self).__init__('Resnet50Model128',
                 153740040 // 128,
                 # [0.8918, 0.4571, 0.3245, 0.2504,
                 #  0.2216, 0.1983, 0.1816, 0.1613,
@@ -278,8 +293,8 @@ class Resnet50Model128(Model):
         self.first_iter_time = 3.7210
 
 class Resnet50Model256(Model):
-    def __init__(self, start_time):
-        super(Resnet50Model256, self).__init__('Resnet50Model256', start_time,
+    def __init__(self):
+        super(Resnet50Model256, self).__init__('Resnet50Model256',
                 153740040 // 256,
                 [1.7870, 0.9100, 0.6052, 0.4604,
                  0.3898, 0.3368, 0.2958, 0.2625,
@@ -291,8 +306,8 @@ class Resnet50Model256(Model):
         self.first_iter_time = 3.7210
 
 class Resnet50Model512(Model):
-    def __init__(self, start_time):
-        super(Resnet50Model512, self).__init__('Resnet50Model512', start_time,
+    def __init__(self):
+        super(Resnet50Model512, self).__init__('Resnet50Model512',
                 153740040 // 512,
                 [3.5820, 1.8252, 1.2256, 0.9199,
                  0.7442, 0.6213, 0.5427, 0.4731,
@@ -310,8 +325,8 @@ class Resnet50Model512(Model):
         self.first_iter_time = 3.7210
 
 class DcganModel256(Model):
-    def __init__(self, start_time):
-        super(DcganModel256, self).__init__('DcganModel256', start_time,
+    def __init__(self):
+        super(DcganModel256, self).__init__('DcganModel256',
                 15000000 // 256,
                 # [0.3350,  0.2585,  0.1819,  0.1053,
                 #  0.09790, 0.09049, 0.08308, 0.07566,
@@ -333,8 +348,8 @@ class DcganModel256(Model):
         self.first_iter_time = 2.6274
 
 class ChatbotModel256(Model):
-    def __init__(self, start_time):
-        super(ChatbotModel256, self).__init__('ChatbotModel256', start_time,
+    def __init__(self):
+        super(ChatbotModel256, self).__init__('ChatbotModel256',
                 660000000 // 256,
                 # [0.1047,  0.09067, 0.07661, 0.06255])
                 [0.1047, 0.0855, 0.07226, 0.06258])
@@ -342,8 +357,8 @@ class ChatbotModel256(Model):
         self.first_iter_time = 0.1
 
 class VideopredictionModel64(Model):
-    def __init__(self, start_time):
-        super(VideopredictionModel64, self).__init__('VideopredictionModel64', start_time,
+    def __init__(self):
+        super(VideopredictionModel64, self).__init__('VideopredictionModel64',
                 3200000 // 64,
                 # [1.1244, 0.8743, 0.6242, 0.3740,
                 #  0.3534, 0.3327, 0.3121, 0.2914,

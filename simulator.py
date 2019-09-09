@@ -2,6 +2,7 @@ import sys
 import time
 import io
 import pickle
+import random
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import OrderedDict
@@ -24,7 +25,13 @@ MODEL_POOL = [
     ChatbotModel256,
     VideopredictionModel64
 ]
+MODEL_POOL_2 = [m.__class__ for m in [x() for x in MODEL_POOL] if m.max_gpus >= 2]
+MODEL_POOL_4 = [m.__class__ for m in [x() for x in MODEL_POOL] if m.max_gpus >= 4]
+MODEL_POOL_8 = [m.__class__ for m in [x() for x in MODEL_POOL] if m.max_gpus >= 8]
+MODEL_POOL_16 = [m.__class__ for m in [x() for x in MODEL_POOL] if m.max_gpus >= 16]
+MODEL_POOL_32 = [m.__class__ for m in [x() for x in MODEL_POOL] if m.max_gpus >= 32]
 ALGS = [
+    'fifo_ne',
     'srtf_ne',
     'srsf_ne',
     # 'srtf_relaxed',
@@ -52,7 +59,38 @@ class Trace(object):
         abs_time = 0
         for _ in range(total_num):
             rand_model = model_pool[np.random.randint(0, len(model_pool))]
-            trace.append((abs_time, rand_model))
+            trace.append((abs_time, rand_model()))
+            abs_time += int(np.random.poisson(avg_interval))
+        self.trace = tuple(trace)
+
+class TiresiasTrace(object):
+    def __init__(self, model_pool, avg_interval=3600, total_num=480):
+        def random_length():
+            return 120 + np.random.rand() * (7200 - 120)
+            # return None
+        self.model_pool = model_pool
+        self.avg_interval = avg_interval
+        models = []
+        for i in range(int(total_num * 40 / 240)):
+            rand_model = MODEL_POOL_2[np.random.randint(0, len(MODEL_POOL_2))]()
+            models.append(rand_model.submit(0, max_gpus=2, length=random_length()))
+        for i in range(int(total_num * 80 / 240)):
+            rand_model = MODEL_POOL_4[np.random.randint(0, len(MODEL_POOL_4))]()
+            models.append(rand_model.submit(0, max_gpus=4, length=random_length()))
+        for i in range(int(total_num * 90 / 240)):
+            rand_model = MODEL_POOL_8[np.random.randint(0, len(MODEL_POOL_8))]()
+            models.append(rand_model.submit(0, max_gpus=8, length=random_length()))
+        for i in range(int(total_num * 25 / 240)):
+            rand_model = MODEL_POOL_16[np.random.randint(0, len(MODEL_POOL_16))]()
+            models.append(rand_model.submit(0, max_gpus=16, length=random_length()))
+        for i in range(int(total_num * 5 / 240)):
+            rand_model = MODEL_POOL_32[np.random.randint(0, len(MODEL_POOL_32))]()
+            models.append(rand_model.submit(0, max_gpus=32, length=random_length()))
+        random.shuffle(models)
+        trace = []
+        abs_time = 0
+        for rand_model in models:
+            trace.append((abs_time, rand_model.submit(abs_time)))
             abs_time += int(np.random.poisson(avg_interval))
         self.trace = tuple(trace)
 
@@ -127,7 +165,7 @@ class Scheduler(object):
         # Add the next job if this is a job arrival event
         if arrival:
             self.current_trace_idx += 1
-            self.unfinished.append(model(self.current_time))
+            self.unfinished.append(model.submit(self.current_time))
         # Assign GPUs to all jobs
         if len(self.unfinished) > 0:
             self.assign(self.unfinished, self.total_gpus, self.state)
@@ -181,7 +219,7 @@ if __name__ == '__main__':
 
     wins = [0] * len(ALGS)
     for n in range(NUM_SIM):
-        tr = Trace(MODEL_POOL, avg_interval, num_models)
+        tr = TiresiasTrace(MODEL_POOL, avg_interval, num_models)
         rets = []
         if PRINT_PLOT:
             fig, [ax_act, ax_qlen, ax_msoj] = plt.subplots(3, 1, sharex=True)

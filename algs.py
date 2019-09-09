@@ -357,6 +357,16 @@ def opt_boundary(jobs, total_gpus, state):
     # state[0] = shares
     # state[1] = js
 
+def fifo_ne(jobs, total_gpus, state):
+    fifo_sorted = sorted(jobs, key=lambda m: m.arrival_time)
+    gpus = total_gpus
+    for m in fifo_sorted:
+        if gpus < m.max_gpus:
+            m.schedule(0)
+        else:
+            gpus -= m.max_gpus
+            m.schedule(m.max_gpus)
+
 def srtf_ne(jobs, total_gpus, state):
     srtf_sorted = sorted(jobs, key=lambda m: m.remain(m.max_gpus))
     gpus = total_gpus
@@ -530,13 +540,14 @@ def opt_pp(jobs, total_gpus, state):
     for m in jobs:
         m.schedule(m.gpus)
 
-def tiresias_las(jobs, total_gpus, thres=2*3600, starving_timeout=None):
+def tiresias_las(jobs, total_gpus, state, thres=3200, starving_timeout=None, relaxed=False):
     """Tiresias-LAS"""
     gpus = total_gpus
     preempt = []
     no_preempt = []
+    schedule_now = []
     for m in jobs:
-        if m.running_time * m.gpus >= thres:
+        if (m.current_time - m.preempted_time) * m.gpus >= thres:
             # Put jobs with low priority in preempt
             preempt.append(m)
         elif starving_timeout is None:
@@ -545,19 +556,30 @@ def tiresias_las(jobs, total_gpus, thres=2*3600, starving_timeout=None):
             # Schedule starving jobs
             if m.gpus > 0 or m.next_event_time > m.current_time:
                 no_preempt.append(m)
-            elif m.max_gpus <= gpus:
-                m.schedule(m.max_gpus, thres / m.max_gpus)
-                gpus -= m.max_gpus
+            else:
+                schedule_now.append(m)
     # Schedule prior jobs first
-    js = sorted(no_preempt, key=lambda m: m.init_sched_time) + \
+    js = sorted(schedule_now, key=lambda m: m.init_sched_time) + \
+            sorted(no_preempt, key=lambda m: m.init_sched_time) + \
             sorted(preempt, key=lambda m: m.init_sched_time)
     for m in js:
-        if m.max_gpus <= gpus:
+        if relaxed and gpus > 0:
+            num = min(m.max_gpus, gpus)
+            m.schedule(num, thres / num)
+            gpus -= num
+            # log('SET TIMEOUT (%s): %.1f' % (m.name, m.next_event_time))
+        elif m.max_gpus <= gpus:
             m.schedule(m.max_gpus, thres / m.max_gpus)
             gpus -= m.max_gpus
-            log('SET TIMEOUT (%s): %.1f' % (m.name, m.next_event_time))
+            # log('SET TIMEOUT (%s): %.1f' % (m.name, m.next_event_time))
         elif starving_timeout is None:
             m.schedule(0)
         else:
             m.schedule(0, starving_timeout)
-            log('SET TIMEOUT (%s): %.1f' % (m.name, m.next_event_time))
+            # log('SET TIMEOUT (%s): %.1f' % (m.name, m.next_event_time))
+
+def tiresias_las_ne(jobs, total_gpus, state):
+    tiresias_las(jobs, total_gpus, state, relaxed=False)
+
+def tiresias_las_relaxed(jobs, total_gpus, state):
+    tiresias_las(jobs, total_gpus, state, relaxed=True)
