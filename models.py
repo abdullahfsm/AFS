@@ -16,6 +16,8 @@ class Model(object):
         self.rdps = [1/dp if dp != 0 else INF for dp in self.dps]
         self.speedups = [times_per_iter[0] / float(t) for t in times_per_iter]
 
+        self.philly_request = self.max_gpus
+
         # Number of iterations remaining
         self.remain_iter = self.total_iter
         # Number of GPUs currently allocated
@@ -76,6 +78,7 @@ class Model(object):
             self.times_per_iter = self.times_per_iter[:max_gpus]
             self.throughputs = self.throughputs[:max_gpus]
             self.speedups = self.speedups[:max_gpus]
+            self.philly_request = max_gpus
         if length is not None:
             self.total_iter = int(length / self.times_per_iter[-1])
             if self.total_iter == 0:

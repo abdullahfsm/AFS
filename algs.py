@@ -361,31 +361,85 @@ def fifo_ne(jobs, total_gpus, state):
     fifo_sorted = sorted(jobs, key=lambda m: m.arrival_time)
     gpus = total_gpus
     for m in fifo_sorted:
-        if gpus < m.max_gpus:
+        if gpus < m.philly_request:
             m.schedule(0)
         else:
-            gpus -= m.max_gpus
-            m.schedule(m.max_gpus)
+            gpus -= m.philly_request
+            m.schedule(m.philly_request)
 
 def srtf_ne(jobs, total_gpus, state):
-    srtf_sorted = sorted(jobs, key=lambda m: m.remain(m.max_gpus))
+    srtf_sorted = sorted(jobs, key=lambda m: m.remain(m.philly_request))
     gpus = total_gpus
     for m in srtf_sorted:
-        if gpus < m.max_gpus:
+        if gpus < m.philly_request:
             m.schedule(0)
         else:
-            gpus -= m.max_gpus
-            m.schedule(m.max_gpus)
+            gpus -= m.philly_request
+            m.schedule(m.philly_request)
 
 def srsf_ne(jobs, total_gpus, state):
-    srsf_sorted = sorted(jobs, key=lambda m: m.max_gpus * m.remain(m.max_gpus))
+    srsf_sorted = sorted(jobs, key=lambda m: m.philly_request * m.remain(m.philly_request))
     gpus = total_gpus
     for m in srsf_sorted:
-        if gpus < m.max_gpus:
+        if gpus < m.philly_request:
             m.schedule(0)
         else:
-            gpus -= m.max_gpus
-            m.schedule(m.max_gpus)
+            gpus -= m.philly_request
+            m.schedule(m.philly_request)
+
+def fifo_relaxed(jobs, total_gpus, state):
+    fifo_sorted = sorted(jobs, key=lambda m: m.arrival_time)
+    gpus = total_gpus
+    for m in fifo_sorted:
+        if gpus < m.philly_request:
+            m.schedule(0)
+        else:
+            gpus -= m.philly_request
+            m.schedule(m.philly_request)
+    for m in fifo_sorted:
+        if m.gpus != 0:
+            continue
+        if gpus == 0:
+            break
+        g = min(gpus, m.philly_request)
+        gpus -= g
+        m.schedule(g)
+
+def srtf_relaxed(jobs, total_gpus, state):
+    srtf_sorted = sorted(jobs, key=lambda m: m.remain(m.philly_request))
+    gpus = total_gpus
+    for m in srtf_sorted:
+        if gpus < m.philly_request:
+            m.schedule(0)
+        else:
+            gpus -= m.philly_request
+            m.schedule(m.philly_request)
+    for m in srtf_sorted:
+        if m.gpus != 0:
+            continue
+        if gpus == 0:
+            break
+        g = min(gpus, m.philly_request)
+        gpus -= g
+        m.schedule(g)
+
+def srsf_relaxed(jobs, total_gpus, state):
+    srsf_sorted = sorted(jobs, key=lambda m: m.philly_request * m.remain(m.philly_request))
+    gpus = total_gpus
+    for m in srsf_sorted:
+        if gpus < m.philly_request:
+            m.schedule(0)
+        else:
+            gpus -= m.philly_request
+            m.schedule(m.philly_request)
+    for m in srsf_sorted:
+        if m.gpus != 0:
+            continue
+        if gpus == 0:
+            break
+        g = min(gpus, m.philly_request)
+        gpus -= g
+        m.schedule(g)
 
 def optimus(jobs, total_gpus, state):
     for m in jobs:
@@ -564,13 +618,13 @@ def tiresias_las(jobs, total_gpus, state, thres=3200, starving_timeout=None, rel
             sorted(preempt, key=lambda m: m.init_sched_time)
     for m in js:
         if relaxed and gpus > 0:
-            num = min(m.max_gpus, gpus)
+            num = min(m.philly_request, gpus)
             m.schedule(num, thres / num)
             gpus -= num
             # log('SET TIMEOUT (%s): %.1f' % (m.name, m.next_event_time))
-        elif m.max_gpus <= gpus:
-            m.schedule(m.max_gpus, thres / m.max_gpus)
-            gpus -= m.max_gpus
+        elif m.philly_request <= gpus:
+            m.schedule(m.philly_request, thres / m.philly_request)
+            gpus -= m.philly_request
             # log('SET TIMEOUT (%s): %.1f' % (m.name, m.next_event_time))
         elif starving_timeout is None:
             m.schedule(0)
