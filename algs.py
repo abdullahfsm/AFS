@@ -357,7 +357,7 @@ def opt_boundary(jobs, total_gpus, state):
     # state[0] = shares
     # state[1] = js
 
-def fifo_ne(jobs, total_gpus, state):
+def fifo(jobs, total_gpus, state):
     fifo_sorted = sorted(jobs, key=lambda m: m.arrival_time)
     gpus = total_gpus
     for m in fifo_sorted:
@@ -367,7 +367,7 @@ def fifo_ne(jobs, total_gpus, state):
             gpus -= m.philly_request
             m.schedule(m.philly_request)
 
-def srtf_ne(jobs, total_gpus, state):
+def srtf(jobs, total_gpus, state):
     srtf_sorted = sorted(jobs, key=lambda m: m.remain(m.philly_request))
     gpus = total_gpus
     for m in srtf_sorted:
@@ -377,7 +377,7 @@ def srtf_ne(jobs, total_gpus, state):
             gpus -= m.philly_request
             m.schedule(m.philly_request)
 
-def srsf_ne(jobs, total_gpus, state):
+def srsf(jobs, total_gpus, state):
     srsf_sorted = sorted(jobs, key=lambda m: m.philly_request * m.remain(m.philly_request))
     gpus = total_gpus
     for m in srsf_sorted:
@@ -539,7 +539,7 @@ def opt_2jobs_test(jobs, total_gpus, state):
     for g, m in zip(shares[0], order):
         m.schedule(g)
 
-def opt_2jobs(jobs, total_gpus, state):
+def alg_c(jobs, total_gpus, state):
     js = [m for m in jobs]
     for m in js:
         m.gpus = 0
@@ -632,7 +632,7 @@ def tiresias_las(jobs, total_gpus, state, thres=3200, starving_timeout=None, rel
             m.schedule(0, starving_timeout)
             # log('SET TIMEOUT (%s): %.1f' % (m.name, m.next_event_time))
 
-def tiresias_las_ne(jobs, total_gpus, state):
+def tiresias(jobs, total_gpus, state):
     tiresias_las(jobs, total_gpus, state, relaxed=False)
 
 def tiresias_las_relaxed(jobs, total_gpus, state):

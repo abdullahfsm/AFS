@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from collections import OrderedDict
 
 import algs
+from plot import plot_show
 from models import *
 from philly_job import PhillyJob
 
@@ -19,7 +20,7 @@ PRINT_PLOT = True
 NUM_SIM = 1
 
 PHILLY_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-    '../philly-traces/trace-data/cluster_job_log')
+    'philly-traces/trace-data/cluster_job_log')
 
 MODEL_POOL = [
     FacenetModel64, #FacenetModel128, FacenetModel256,
@@ -37,19 +38,19 @@ MODEL_POOL_8 = [m.__class__ for m in [x() for x in MODEL_POOL] if m.max_gpus >= 
 MODEL_POOL_16 = [m.__class__ for m in [x() for x in MODEL_POOL] if m.max_gpus >= 16]
 MODEL_POOL_32 = [m.__class__ for m in [x() for x in MODEL_POOL] if m.max_gpus >= 32]
 ALGS = [
-    # 'fifo_ne',
-    # 'srtf_ne',
-    # 'srsf_ne',
+    # 'fifo',
+    'srtf',
+    'srsf',
     # 'fifo_relaxed',
     # 'srtf_relaxed',
     # 'srsf_relaxed',
-    # 'tiresias_las_ne',
+    'tiresias',
     'max_min',
-    'optimus',
+    # 'optimus',
     # 'max_speedup',
-    'opt_pp',
-    'opt_2jobs',
-    'opt_boundary',
+    # 'opt_pp',
+    'alg_c',
+    # 'opt_boundary',
     # 'opt_greedy',
     # 'brute_force',
 ]
@@ -68,6 +69,20 @@ class Trace(object):
         for _ in range(total_num):
             rand_model = model_pool[np.random.randint(0, len(model_pool))]
             trace.append((abs_time, rand_model()))
+            abs_time += int(np.random.poisson(avg_interval))
+        self.trace = tuple(trace)
+
+class DcganTrace(object):
+    def __init__(self, model_pool, avg_interval, total_num):
+        self.model_pool = model_pool
+        self.avg_interval = avg_interval
+        trace = []
+        abs_time = 0
+        for _ in range(total_num):
+            model = DcganModel256()
+            model.total_iter *= 10.
+            model.remain_iter *= 10.
+            trace.append((abs_time, model.submit(0, max_gpus=np.random.randint(1, 64))))
             abs_time += int(np.random.poisson(avg_interval))
         self.trace = tuple(trace)
 
@@ -109,7 +124,14 @@ class PhillyTrace(object):
 
         with io.open(PHILLY_LOG_PATH, 'r') as f:
             cluster_job_log = json.load(f)
-            jobs = [PhillyJob(**job) for job in cluster_job_log]
+        jobs = []
+        vcs = set()
+        for j in cluster_job_log:
+            job = PhillyJob(**j)
+            vcs.add(job.vc)
+            if job.vc == '2869ce':
+                jobs.append(job)
+        print(vcs)
         jobs.sort(key=lambda j: j.submitted_time.timestamp())
         # jobs = jobs[20000:]
         start = jobs[0].submitted_time.timestamp()
@@ -125,13 +147,14 @@ class PhillyTrace(object):
             if len(pool) == 0:
                 continue
             rand_model = pool[np.random.randint(0, len(pool))]()
-            rand_model.philly_request = j.num_gpus
+            rand_model.philly_request = max([j.num_gpus, rand_model.num_gpus_for_speedup(0.0)])
             models.append(rand_model.submit(j.submitted_time.timestamp() - start,
                 # max_gpus=j.num_gpus,
-                length=j.run_time))
+                length=j.run_time,
+                length_gpus=rand_model.max_gpus))
             total_num -= 1
         # fig, ax = plt.subplots()
-        # ax.hist([m.max_gpus for m in models], bins=32)
+        # ax.hist([m.philly_request for m in models], bins=64)
         # plt.show()
         self.trace = tuple(((m.arrival_time, m) for m in models))
 
@@ -185,22 +208,34 @@ class Scheduler(object):
             m.continue_until(next_event_time)
             if m.is_finished:
                 new_finished.append(m)
-                self.finished.append(m)
             else:
                 unfinished.append(m)
-        if new_finished:
-            prog_data = (self.current_time,
-                sum([m.total_runtime for m in self.finished])/float(len(self.finished)),
+        if arrival or new_finished:
+            if len(self.finished) == 0:
+                act_before = 0
+            else:
+                act_before = sum([m.total_runtime for m in self.finished])/float(len(self.finished))
+            all_finished = self.finished + new_finished
+            if len(all_finished) == 0:
+                act_after = 0
+            else:
+                act_after = sum([m.total_runtime for m in all_finished])/float(len(all_finished))
+            prog_data = [(next_event_time,
+                act_before,
+                len(self.unfinished),
+                max([m.total_runtime for m in self.unfinished]) if self.unfinished else 0),
+                (next_event_time,
+                act_after,
                 len(unfinished),
-                max([m.total_runtime for m in unfinished]) if unfinished else 0)
+                max([m.total_runtime for m in unfinished]) if unfinished else 0)]
+            if PRINT_PLOT:
+                self.prog_data.extend(prog_data)
         if PRINT_PROG:
             for m in new_finished:
-                self.prog_file.write('%d,%.1f,%d,%.1f\n' % prog_data)
-        if PRINT_PLOT:
-            for m in new_finished:
-                self.prog_data.append(prog_data)
+                self.prog_file.write('%d,%.1f,%d,%.1f\n' % prog_data[-1])
         for m in new_finished:
-            log('%s, %s' % (m.finish_info(), str(prog_data)))
+            log('%s, %s' % (m.finish_info(), str(prog_data[-1])))
+        self.finished.extend(new_finished)
         self.unfinished = unfinished
         self.current_time = next_event_time
         # Add the next job if this is a job arrival event
@@ -260,7 +295,7 @@ if __name__ == '__main__':
 
     wins = [0] * len(ALGS)
     for n in range(NUM_SIM):
-        tr = TiresiasTrace(MODEL_POOL, avg_interval, num_models)
+        tr = PhillyTrace(MODEL_POOL, avg_interval, num_models)
         rets = []
         if PRINT_PLOT:
             fig, [ax_act, ax_qlen, ax_msoj] = plt.subplots(3, 1, sharex=True)
@@ -283,12 +318,12 @@ if __name__ == '__main__':
                     prog_data_act.append(act/3600.)
                     prog_data_qlen.append(qlen)
                     prog_data_msoj.append(msoj/3600.)
+                    max_act = max(max_act, prog_data_act[-1])
                 prog_data_ctime_list.append(prog_data_ctime)
                 prog_data_act_list.append(prog_data_act)
                 prog_data_qlen_list.append(prog_data_qlen)
                 prog_data_msoj_list.append(prog_data_msoj)
                 last_time = max(last_time, prog_data_ctime[-1])
-                max_act = max(max_act, prog_data_act[-1])
         for i, a in enumerate(ALGS):
             prog_data_ctime_list[i].append(last_time)
             prog_data_act_list[i].append(prog_data_act_list[i][-1])
@@ -302,17 +337,10 @@ if __name__ == '__main__':
             if abs(r - min_ret) < 1e-4:
                 wins[i] += 1
         if PRINT_PLOT:
-            ax_act.set_ylabel('ACT (hour)')
-            ax_qlen.set_ylabel('Queue Length')
-            ax_msoj.set_ylabel('Max Sojourn Time (hour)')
-            ax_act.set_ylim(0, max_act)
-            for ax in [ax_act, ax_qlen, ax_msoj]:
-                ax.grid(alpha=.3, linestyle='--')
-                ax.set_xlim(0, last_time)
-            plt.xlabel('Time (day)')
-            ax_act.legend(loc='upper left')
-            plt.show()
+            plot_show(fig, (ax_act, ax_qlen, ax_msoj))
             with io.open('plot_%d.pkl' % time.time(), 'wb') as f:
+                pickle.dump((ax_act, ax_qlen, ax_msoj), f)
+            with io.open('plot_latest.pkl', 'wb') as f:
                 pickle.dump((ax_act, ax_qlen, ax_msoj), f)
         print('')
     print('\n== Result ==')

@@ -70,7 +70,14 @@ class Model(object):
     def total_runtime(self):
         return self.current_time - self.arrival_time
 
-    def submit(self, arrival_time, max_gpus=None, length=None):
+    def num_gpus_for_speedup(self, ratio):
+        required_speedup = self.speedups[-1] * ratio
+        for i, s in enumerate(self.speedups):
+            if s >= required_speedup:
+                return i + 1
+        assert(0)
+
+    def submit(self, arrival_time, max_gpus=None, length=None, length_gpus=None):
         self.arrival_time = arrival_time
         self.current_time = arrival_time
         self.evicted_time = arrival_time
@@ -80,7 +87,9 @@ class Model(object):
             self.speedups = self.speedups[:max_gpus]
             self.philly_request = max_gpus
         if length is not None:
-            self.total_iter = int(length / self.times_per_iter[-1])
+            if length_gpus is None:
+                length_gpus = self.max_gpus
+            self.total_iter = int(length / self.tpi(length_gpus))
             if self.total_iter == 0:
                 self.total_iter = 1
         self.remain_iter = self.total_iter
