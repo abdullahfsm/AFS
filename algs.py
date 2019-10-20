@@ -594,26 +594,28 @@ def opt_pp(jobs, total_gpus, state):
     for m in jobs:
         m.schedule(m.gpus)
 
-def tiresias_las(jobs, total_gpus, state, thres=3200, starving_timeout=None, relaxed=False):
+def tiresias_las(jobs, total_gpus, state, thres=3200, starvation_knob=None, relaxed=False):
     """Tiresias-LAS"""
     gpus = total_gpus
     preempt = []
     no_preempt = []
     schedule_now = []
     for m in jobs:
+        # print(m.current_time, m.preempted_time, m.evicted_time)
         if (m.current_time - m.preempted_time) * m.gpus >= thres:
             # Put jobs with low priority in preempt
             preempt.append(m)
-        elif starving_timeout is None:
+        elif starvation_knob is None:
             no_preempt.append(m)
         else:
             # Schedule starving jobs
             if m.gpus > 0 or m.next_event_time > m.current_time:
+                # print('SCHED NOW: %s' % m.name)
                 no_preempt.append(m)
             else:
                 schedule_now.append(m)
     # Schedule prior jobs first
-    js = sorted(schedule_now, key=lambda m: m.init_sched_time) + \
+    js = sorted(schedule_now, key=lambda m: m.evicted_time) + \
             sorted(no_preempt, key=lambda m: m.init_sched_time) + \
             sorted(preempt, key=lambda m: m.init_sched_time)
     for m in js:
@@ -626,14 +628,14 @@ def tiresias_las(jobs, total_gpus, state, thres=3200, starving_timeout=None, rel
             m.schedule(m.philly_request, thres / m.philly_request)
             gpus -= m.philly_request
             # log('SET TIMEOUT (%s): %.1f' % (m.name, m.next_event_time))
-        elif starving_timeout is None:
+        elif starvation_knob is None:
             m.schedule(0)
         else:
-            m.schedule(0, starving_timeout)
+            m.schedule(0, (m.current_time - m.total_evicted)*starvation_knob)
             # log('SET TIMEOUT (%s): %.1f' % (m.name, m.next_event_time))
 
 def tiresias(jobs, total_gpus, state):
-    tiresias_las(jobs, total_gpus, state, relaxed=False)
+    tiresias_las(jobs, total_gpus, state, thres=2*3600, starvation_knob=0.5, relaxed=False)
 
 def tiresias_las_relaxed(jobs, total_gpus, state):
     tiresias_las(jobs, total_gpus, state, relaxed=True)

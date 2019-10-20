@@ -15,7 +15,6 @@ from models import *
 from philly_job import PhillyJob
 
 NO_LOG = True
-PRINT_PROG = False
 PRINT_PLOT = True
 NUM_SIM = 1
 
@@ -38,21 +37,21 @@ MODEL_POOL_8 = [m.__class__ for m in [x() for x in MODEL_POOL] if m.max_gpus >= 
 MODEL_POOL_16 = [m.__class__ for m in [x() for x in MODEL_POOL] if m.max_gpus >= 16]
 MODEL_POOL_32 = [m.__class__ for m in [x() for x in MODEL_POOL] if m.max_gpus >= 32]
 ALGS = [
+    # 'brute_force',
     # 'fifo',
+    'max_min',
     'srtf',
-    'srsf',
+    # 'alg_c',
+    # 'srsf',
     # 'fifo_relaxed',
     # 'srtf_relaxed',
     # 'srsf_relaxed',
     'tiresias',
-    'max_min',
     # 'optimus',
     # 'max_speedup',
     # 'opt_pp',
-    'alg_c',
     # 'opt_boundary',
     # 'opt_greedy',
-    # 'brute_force',
 ]
 INF = float('inf')
 
@@ -70,6 +69,17 @@ class Trace(object):
             rand_model = model_pool[np.random.randint(0, len(model_pool))]
             trace.append((abs_time, rand_model()))
             abs_time += int(np.random.poisson(avg_interval))
+        self.trace = tuple(trace)
+
+class ManualTrace(object):
+    def __init__(self, model_pool, avg_interval, total_num):
+        self.model_pool = model_pool
+        self.avg_interval = avg_interval
+        trace = [(1, Inception4Model256())]
+        for i in range(10):
+            j = DcganModel256()
+            j.philly_request = 8
+            trace.append((i*26760, j))
         self.trace = tuple(trace)
 
 class DcganTrace(object):
@@ -129,11 +139,11 @@ class PhillyTrace(object):
         for j in cluster_job_log:
             job = PhillyJob(**j)
             vcs.add(job.vc)
-            if job.vc == '2869ce':
+            if job.vc == '6c71a0':
                 jobs.append(job)
-        print(vcs)
+        print(sorted(list(vcs)))
         jobs.sort(key=lambda j: j.submitted_time.timestamp())
-        # jobs = jobs[20000:]
+        # jobs = jobs[500:]
         start = jobs[0].submitted_time.timestamp()
         models = []
         for j in jobs:
@@ -147,7 +157,8 @@ class PhillyTrace(object):
             if len(pool) == 0:
                 continue
             rand_model = pool[np.random.randint(0, len(pool))]()
-            rand_model.philly_request = max([j.num_gpus, rand_model.num_gpus_for_speedup(0.0)])
+            rand_model.philly_request = j.num_gpus
+            # rand_model.philly_request = rand_model.num_gpus_for_speedup(0.5)
             models.append(rand_model.submit(j.submitted_time.timestamp() - start,
                 # max_gpus=j.num_gpus,
                 length=j.run_time,
@@ -170,8 +181,31 @@ class Scheduler(object):
         self.assign = algs.__dict__[alg]
         self.alg = alg
         self.prog_data = []
-        if PRINT_PROG:
-            self.prog_file = io.open('prog_%s.csv' % alg, 'w')
+        for _, m in self.trace:
+            m.init()
+
+    def act(self):
+        total_num = len(self.finished) + len(self.unfinished)
+        if total_num == 0:
+            return 0
+        sct = 0
+        for j in self.finished:
+            sct += j.total_runtime
+        for j in self.unfinished:
+            sct += j.total_runtime
+        return float(sct)/total_num
+
+    def mst(self):
+        if len(self.unfinished) == 0:
+            return 0
+        else:
+            return max([j.total_runtime for j in self.unfinished])
+
+    def eff(self):
+        s = 0
+        for j in self.finished:
+            s += j.total_iter * j.times_per_iter[0]
+        return s
 
     def continue_until_next_event(self):
         # Check the nearest event from unfinished jobs
@@ -192,6 +226,7 @@ class Scheduler(object):
         else:
             next_event_time = arrival_time
             arrival = True
+            self.current_trace_idx += 1
         if next_event_time == INF:
             raise RuntimeError('Algorithm %s scheduled no jobs even though '
                                '%d waiting job(s) exist.' % (self.alg, len(self.unfinished)))
@@ -203,6 +238,9 @@ class Scheduler(object):
         # print('NEXT_EVENT: %f, ARRIVAL: %f' % (next_event_time, arrival_time))
         new_finished = []
         unfinished = []
+        # Add the next job if this is a job arrival event
+        if arrival:
+            unfinished.append(model.submit(next_event_time))
         for m in self.unfinished:
             # Add very little amount of time to surely trigger the event
             m.continue_until(next_event_time)
@@ -210,38 +248,17 @@ class Scheduler(object):
                 new_finished.append(m)
             else:
                 unfinished.append(m)
-        if arrival or new_finished:
-            if len(self.finished) == 0:
-                act_before = 0
-            else:
-                act_before = sum([m.total_runtime for m in self.finished])/float(len(self.finished))
-            all_finished = self.finished + new_finished
-            if len(all_finished) == 0:
-                act_after = 0
-            else:
-                act_after = sum([m.total_runtime for m in all_finished])/float(len(all_finished))
-            prog_data = [(next_event_time,
-                act_before,
-                len(self.unfinished),
-                max([m.total_runtime for m in self.unfinished]) if self.unfinished else 0),
-                (next_event_time,
-                act_after,
-                len(unfinished),
-                max([m.total_runtime for m in unfinished]) if unfinished else 0)]
-            if PRINT_PLOT:
-                self.prog_data.extend(prog_data)
-        if PRINT_PROG:
-            for m in new_finished:
-                self.prog_file.write('%d,%.1f,%d,%.1f\n' % prog_data[-1])
         for m in new_finished:
-            log('%s, %s' % (m.finish_info(), str(prog_data[-1])))
+            log(m.finish_info())
+        if arrival or new_finished:
+            # Before
+            self.prog_data.append((next_event_time, self.act(), len(self.unfinished), self.mst(), self.eff()))
         self.finished.extend(new_finished)
         self.unfinished = unfinished
         self.current_time = next_event_time
-        # Add the next job if this is a job arrival event
-        if arrival:
-            self.current_trace_idx += 1
-            self.unfinished.append(model.submit(self.current_time))
+        if arrival or new_finished:
+            # After
+            self.prog_data.append((next_event_time, self.act(), len(self.unfinished), self.mst(), self.eff()))
         # Assign GPUs to all jobs
         if len(self.unfinished) > 0:
             self.assign(self.unfinished, self.total_gpus, self.state)
@@ -298,13 +315,14 @@ if __name__ == '__main__':
         tr = PhillyTrace(MODEL_POOL, avg_interval, num_models)
         rets = []
         if PRINT_PLOT:
-            fig, [ax_act, ax_qlen, ax_msoj] = plt.subplots(3, 1, sharex=True)
+            fig, [ax_act, ax_qlen, ax_msoj, ax_util] = plt.subplots(1, 4, sharex=False)
         max_act = 0
         last_time = 0
         prog_data_ctime_list = []
         prog_data_act_list = []
         prog_data_qlen_list = []
         prog_data_msoj_list = []
+        prog_data_util_list = []
         for a in ALGS:
             ret, prog_data = run_sim(a, num_gpus, tr.trace)
             rets.append(ret)
@@ -313,35 +331,41 @@ if __name__ == '__main__':
                 prog_data_act = []
                 prog_data_qlen = []
                 prog_data_msoj = []
-                for ctime, act, qlen, msoj in prog_data:
+                prog_data_util = []
+                for ctime, act, qlen, msoj, util in prog_data:
                     prog_data_ctime.append(ctime/3600./24.)
                     prog_data_act.append(act/3600.)
                     prog_data_qlen.append(qlen)
                     prog_data_msoj.append(msoj/3600.)
+                    prog_data_util.append(util/num_gpus*100.)
                     max_act = max(max_act, prog_data_act[-1])
                 prog_data_ctime_list.append(prog_data_ctime)
                 prog_data_act_list.append(prog_data_act)
                 prog_data_qlen_list.append(prog_data_qlen)
                 prog_data_msoj_list.append(prog_data_msoj)
+                prog_data_util_list.append(prog_data_util)
                 last_time = max(last_time, prog_data_ctime[-1])
-        for i, a in enumerate(ALGS):
-            prog_data_ctime_list[i].append(last_time)
-            prog_data_act_list[i].append(prog_data_act_list[i][-1])
-            prog_data_qlen_list[i].append(prog_data_qlen_list[i][-1])
-            prog_data_msoj_list[i].append(prog_data_msoj_list[i][-1])
-            ax_act.plot(prog_data_ctime_list[i], prog_data_act_list[i], label=a)
-            ax_qlen.plot(prog_data_ctime_list[i], prog_data_qlen_list[i], label=a)
-            ax_msoj.plot(prog_data_ctime_list[i], prog_data_msoj_list[i], label=a)
+        if PRINT_PLOT:
+            for i, a in enumerate(ALGS):
+                prog_data_ctime_list[i].append(last_time * 1.03)
+                prog_data_act_list[i].append(prog_data_act_list[i][-1])
+                prog_data_qlen_list[i].append(prog_data_qlen_list[i][-1])
+                prog_data_msoj_list[i].append(prog_data_msoj_list[i][-1])
+                prog_data_util_list[i].append(prog_data_util_list[i][-1])
+                ax_act.plot(prog_data_ctime_list[i], prog_data_act_list[i], label=a)
+                ax_qlen.plot(prog_data_ctime_list[i], prog_data_qlen_list[i], label=a)
+                ax_msoj.plot(prog_data_ctime_list[i], prog_data_msoj_list[i], label=a)
+                ax_util.plot(prog_data_ctime_list[i], prog_data_util_list[i], label=a)
         min_ret = min(rets)
         for i, r in enumerate(rets):
             if abs(r - min_ret) < 1e-4:
                 wins[i] += 1
         if PRINT_PLOT:
-            plot_show(fig, (ax_act, ax_qlen, ax_msoj))
+            plot_show(fig, (ax_act, ax_qlen, ax_msoj, ax_util))
             with io.open('plot_%d.pkl' % time.time(), 'wb') as f:
-                pickle.dump((ax_act, ax_qlen, ax_msoj), f)
+                pickle.dump((ax_act, ax_qlen, ax_msoj, ax_util), f)
             with io.open('plot_latest.pkl', 'wb') as f:
-                pickle.dump((ax_act, ax_qlen, ax_msoj), f)
+                pickle.dump((ax_act, ax_qlen, ax_msoj, ax_util), f)
         print('')
     print('\n== Result ==')
     for i, a in enumerate(ALGS):

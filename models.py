@@ -25,9 +25,9 @@ class Model(object):
         # Current absolute time
         self.current_time = 0
         # The recent absolute time when is alloced zero GPU
-        self.evicted_time = 0
+        self.evicted_time = INF
         # The recent absolute time when is alloced one or more GPUs
-        self.preempted_time = 0
+        self.preempted_time = INF
         # How long has this model been evicted since arrival
         self.total_evicted = 0
         self.total_evicted_temp = 0
@@ -36,11 +36,19 @@ class Model(object):
         # The nearest abs time when this model raises a re-allocation event.
         self.next_event_time = INF
 
-        # For tests
-        self.tickets = []
-
         # Check validity
         self.validate()
+
+    def init(self):
+        self.remain_iter = self.total_iter
+        self.gpus = 0
+        self.current_time = 0
+        self.evicted_time = INF
+        self.preempted_time = INF
+        self.total_evicted = 0
+        self.total_evicted_temp = 0
+        self.init_sched_time = INF
+        self.next_event_time = INF
 
     @property
     def max_gpus(self):
@@ -69,6 +77,12 @@ class Model(object):
     @property
     def total_runtime(self):
         return self.current_time - self.arrival_time
+
+    @property
+    def egpus(self):
+        if self.gpus == 0:
+            return 0
+        return self.speedups[self.gpus - 1]
 
     def num_gpus_for_speedup(self, ratio):
         required_speedup = self.speedups[-1] * ratio
@@ -142,22 +156,24 @@ class Model(object):
 
     def continue_until(self, time):
         """Progress time until `time`."""
+        # print(time, self.current_time, self.arrival_time, self.total_runtime, self.total_evicted, self.preempted_time, self.evicted_time)
         time_diff = time - self.current_time
         if time_diff < 0:
             raise Exception('cur_time %d, time %d' % (self.current_time, time))
         if time_diff == 0:
             return
         if self.gpus == 0:
-            if self.evicted_time == 0:
+            self.preempted_time = INF
+            if self.evicted_time == INF:
                 self.evicted_time = self.current_time
-                self.preempted_time = 0
             self.current_time = time
             self.total_evicted = self.total_evicted_temp + time - self.evicted_time
         else:
-            if self.preempted_time == 0:
+            if self.preempted_time == INF:
                 self.total_evicted_temp += self.current_time - self.evicted_time
+                self.total_evicted = self.total_evicted_temp
                 self.preempted_time = self.current_time
-                self.evicted_time = 0
+            self.evicted_time = INF
             tpi = self.times_per_iter[self.gpus - 1]
             proced_iter = int(time_diff / float(tpi) + 1e-5)
             if self.remain_iter <= proced_iter:
@@ -172,6 +188,8 @@ class Model(object):
                 self.current_time = time
             if self.init_sched_time == INF:
                 self.init_sched_time = time
+        # print(time, self.current_time, self.arrival_time, self.total_runtime, self.total_evicted, self.preempted_time, self.evicted_time)
+        assert(self.total_runtime >= self.total_evicted)
 
     def validate(self):
         """Validate if the model meets assumptions of simulation."""
@@ -339,7 +357,7 @@ class Resnet50Model512(Model):
 class DcganModel256(Model):
     def __init__(self):
         super(DcganModel256, self).__init__('DcganModel256',
-                15000000 // 256,
+                900000000 // 256,
                 # [0.3350,  0.2585,  0.1819,  0.1053,
                 #  0.09790, 0.09049, 0.08308, 0.07566,
                 #  0.07273, 0.06979, 0.06685, 0.06391,
