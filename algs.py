@@ -573,6 +573,60 @@ def alg_c(jobs, total_gpus, state):
     for m in jobs:
         m.schedule(m.gpus)
 
+def alg_c_eq(jobs, total_gpus, state):
+    js = [m for m in jobs]
+    for m in js:
+        m.gpus = 0
+    gpus = total_gpus
+    while gpus > 0 and len(js) > 0:
+        cand = js[0]
+        for m in js[1:]:
+            if m.remain(m.gpus) < cand.remain(cand.gpus):
+                l, h = m, cand
+            else:
+                l, h = cand, m
+            sl0 = 1 / l.remain(l.gpus)
+            sl1 = 1 / l.remain(l.gpus + 1)
+            sh0 = 1 / h.remain(h.gpus)
+            sh1 = 1 / h.remain(h.gpus + 1)
+            if sl0 == 0:
+                cand = l if sl1 > sh1 else h
+            elif (sl1 - sl0) / sl0 > (sh1 - sh0) / sh1:
+                cand = l
+            else:
+                cand = h
+        cand.gpus += 1
+        if cand.gpus == cand.max_gpus:
+            js.remove(cand)
+        gpus -= 1
+    for m in jobs:
+        m.schedule(m.gpus)
+
+def alg_c_rough(jobs, total_gpus, state):
+    js = [m for m in jobs]
+    for m in js:
+        m.gpus = 0
+    gpus = total_gpus
+    while gpus > 0 and len(js) > 0:
+        cand = js[0]
+        for m in js[1:]:
+            if m.remain(m.gpus) < cand.remain(cand.gpus):
+                l, h = m, cand
+            else:
+                l, h = cand, m
+            if l.gpus == 0:
+                cand = l if h.remain(h.gpus + 1) > l.remain(l.gpus + 1) else h
+            elif l.gpus <= h.gpus:
+                cand = l
+            else:
+                cand = h
+        cand.gpus += 1
+        if cand.gpus == cand.max_gpus:
+            js.remove(cand)
+        gpus -= 1
+    for m in jobs:
+        m.schedule(m.gpus)
+
 def opt_pp(jobs, total_gpus, state):
     def fac(m):
         return m.throughput(m.gpus + 1) * m.rdp(m.gpus)
@@ -590,6 +644,34 @@ def opt_pp(jobs, total_gpus, state):
         if cand.gpus == cand.max_gpus:
             js.remove(cand)
         gpus -= 1
+
+    for m in jobs:
+        m.schedule(m.gpus)
+
+def opt_pp_2(jobs, total_gpus, state):
+    def fac(m):
+        return m.throughput(m.gpus + 1) * m.rdp(m.gpus)
+
+    js = [m for m in jobs]
+    for m in js:
+        m.gpus = 0
+    gpus = total_gpus
+    for m in js:
+        if gpus > 0:
+            m.gpus = 1
+            gpus -= 1
+        else:
+            break
+    if gpus > 0:
+        while gpus > 0 and len(js) > 0:
+            cand = js[0]
+            for m in js[1:]:
+                if fac(m) <= fac(cand):
+                    cand = m
+            cand.gpus += 1
+            if cand.gpus == cand.max_gpus:
+                js.remove(cand)
+            gpus -= 1
 
     for m in jobs:
         m.schedule(m.gpus)
