@@ -5,6 +5,7 @@ _SCALE_TOTAL_ITER = 0.1
 
 class Model(object):
     def __init__(self, name, total_iter, times_per_iter):
+        times_per_iter = [x / 1000000. for x in times_per_iter]
         # Constants
         self.name = name
         self.arrival_time = 0
@@ -35,6 +36,9 @@ class Model(object):
         self.init_sched_time = INF
         # The nearest abs time when this model raises a re-allocation event.
         self.next_event_time = INF
+
+        # Tiresias
+        self.tiresias_tj = 0
 
         # Check validity
         self.validate()
@@ -146,30 +150,29 @@ class Model(object):
         assert(timeout is None or timeout >= 0)
         self.gpus = num_gpus
         fin_time = self.finish_time()
-        if timeout is None:
-            # Default event time: when this model finishes
-            self.next_event_time = fin_time
-        else:
+        self.next_event_time = min(fin_time, self.next_event_time)
+        if timeout is not None:
             # Set the nearest event only
-            self.next_event_time = min(fin_time, self.current_time + timeout)
+            self.next_event_time = min(self.next_event_time, self.current_time + timeout)
         # print('schedule %s: %f, %f' % (self.name, fin_time, self.current_time))
 
     def continue_until(self, time):
         """Progress time until `time`."""
-        # print(time, self.current_time, self.arrival_time, self.total_runtime, self.total_evicted, self.preempted_time, self.evicted_time)
         time_diff = time - self.current_time
         if time_diff < 0:
             raise Exception('cur_time %d, time %d' % (self.current_time, time))
         if time_diff == 0:
             return
         if self.gpus == 0:
-            self.preempted_time = INF
             if self.evicted_time == INF:
+                self.tiresias_tj = self.current_time - self.preempted_time
                 self.evicted_time = self.current_time
+            self.preempted_time = INF
             self.current_time = time
             self.total_evicted = self.total_evicted_temp + time - self.evicted_time
         else:
             if self.preempted_time == INF:
+                self.tiresias_tj = 0
                 self.total_evicted_temp += self.current_time - self.evicted_time
                 self.total_evicted = self.total_evicted_temp
                 self.preempted_time = self.current_time
@@ -188,7 +191,6 @@ class Model(object):
                 self.current_time = time
             if self.init_sched_time == INF:
                 self.init_sched_time = time
-        # print(time, self.current_time, self.arrival_time, self.total_runtime, self.total_evicted, self.preempted_time, self.evicted_time)
         assert(self.total_runtime >= self.total_evicted)
 
     def validate(self):
@@ -208,7 +210,7 @@ class Model(object):
             s2 = self.speedups[i + 2]
             assert(s0 <= s1)
             assert(s1 <= s2)
-            assert(s1 - s0 >= s2 - s1)
+            # assert(s1 - s0 >= s2 - s1)
 
     def finish_info(self):
         return '%.1f,%s,%.1f,%.1f' % (self.current_time,
@@ -218,189 +220,129 @@ class Model(object):
 
 ################################################################################
 
-class FacenetModel64(Model):
-    def __init__(self):
-        super(FacenetModel64, self).__init__('FaceNetModel64',
-                45000000 // 64,
-                # [0.2476, 0.1641, 0.1324, 0.1229])
-                [0.2476, 0.1850, 0.1477, 0.1230])
-        self.import_graph_time = 8.8713
-        self.first_iter_time = 15.8114
-
-class FacenetModel128(Model):
-    def __init__(self):
-        super(FacenetModel128, self).__init__('FaceNetModel128',
-                45000000 // 128,
-                [0.4357, 0.2595, 0.1959, 0.1627,
-                 0.1484, 0.1403, 0.1363, 0.1284])
-        self.import_graph_time = 8.8713
-        self.first_iter_time = 15.8114
-
-class FacenetModel256(Model):
-    def __init__(self):
-        super(FacenetModel256, self).__init__('FaceNetModel256',
-                45000000 // 256,
-                [0.9000, 0.4499, 0.3235, 0.2614,
-                 0.2259, 0.1978, 0.1794, 0.1650,
-                 0.1605, 0.1531, 0.1472, 0.1456])
-        self.import_graph_time = 8.8713
-        self.first_iter_time = 15.8114
-
 class VggnetModel256(Model):
     def __init__(self):
         super(VggnetModel256, self).__init__('VggnetModel256',
                 153740040 // 256,
-                # [2.8591, 2.1769, 1.4946, 0.8124,
-                #  0.7849, 0.7574, 0.7299, 0.7024,
-                #  0.6400, 0.5777, 0.5153, 0.4529,
-                #  0.4343, 0.4157, 0.3971, 0.3786])
-                [2.8591, 1.554, 1.067, 0.8125,
-                 0.7351, 0.6712, 0.6176, 0.572,
-                 0.5366, 0.5055, 0.4779, 0.4532,
-                 0.4317, 0.4124, 0.3948, 0.3787])
-        self.import_graph_time = 0.3524
-        self.first_iter_time = 3.5694
+                [3020532, 1659208, 1263951, 868694,
+                765689, 662684, 559679, 456675])
 
 class GooglenetModel128(Model):
     def __init__(self):
         super(GooglenetModel128, self).__init__('GooglenetModel128',
                 153740040 // 128,
-                # [0.3631,  0.1908,  0.1384,  0.1074,
-                #  0.09246, 0.08308, 0.07820, 0.06242,
-                #  0.05980, 0.05287, 0.05127, 0.05008,
-                #  0.04694, 0.04701, 0.04521, 0.04169,
-                #  0.04169, 0.04169, 0.04115, 0.04095])
-                [0.36310, 0.20233, 0.14029, 0.10740,
-                 0.09095, 0.07889, 0.06966, 0.06240,
-                 0.05870, 0.05543, 0.05251, 0.04990,
-                 0.04754, 0.04541, 0.04347, 0.04170,
-                 0.04151, 0.04133, 0.04116, 0.04100])
-        self.import_graph_time = 0.8772
-        self.first_iter_time = 3.2041
+                [346970, 187140, 146661, 106182,
+                95118, 84055, 72992, 61929,
+                58369, 54810, 51251, 47692,
+                46375, 45058, 43741, 42424,
+                42077, 41731, 41385, 41039])
 
 class Inception4Model256(Model):
     def __init__(self):
         super(Inception4Model256, self).__init__('Inception4Model256',
                 153740040 // 256,
-                # [5.5325, 2.8125, 1.8716, 1.4081,
-                #  1.1203, 0.9443, 0.8087, 0.7084,
-                #  0.6496, 0.5976, 0.5636, 0.5279,
-                #  0.4832, 0.4654, 0.4498, 0.4084,
-                #  0.4086, 0.3908, 0.3766, 0.3581,
-                #  0.3649, 0.3393, 0.3393, 0.3179,
-                #  0.3179, 0.3046, 0.3027, 0.3027,
-                #  0.2822, 0.2704, 0.2587, 0.2469,
-                #  0.2478, 0.2487, 0.2496, 0.2506,
-                #  0.2467, 0.2429, 0.2390, 0.2352])
-                [5.5325, 2.7994, 1.8739, 1.4089,
-                 1.1293, 0.9426, 0.8089, 0.7085,
-                 0.6428, 0.5883, 0.5424, 0.5032,
-                 0.4709, 0.4427, 0.4177, 0.3954,
-                 0.3757, 0.3581, 0.3421, 0.3275,
-                 0.3175, 0.3082, 0.2995, 0.2913,
-                 0.2837, 0.2766, 0.2699, 0.2636,
-                 0.2591, 0.2549, 0.2509, 0.2471,
-                 0.2451, 0.2434, 0.2418, 0.2403,
-                 0.2389, 0.2376, 0.2364, 0.2353])
-        self.import_graph_time = 2.8707
-        self.first_iter_time = 7.4958
+                [5834222, 2988258, 2228434, 1468610,
+                1288619, 1108629, 928639, 748649,
+                689155, 629661, 570167, 510674,
+                488419, 466165, 443911, 421657,
+                402481, 383305, 364129, 344953,
+                334708, 324464, 314220, 303976,
+                296448, 288921, 281394, 273867,
+                269776, 265685, 261594, 257504,
+                252463, 247423, 242382, 237342,
+                234883, 232425, 229966, 227508,
+                221494, 215481, 209468, 203455,
+                202402, 201350, 200298, 199246,
+                195215, 191185, 187155, 183125])
 
 class Resnet50Model128(Model):
     def __init__(self):
         super(Resnet50Model128, self).__init__('Resnet50Model128',
                 153740040 // 128,
-                # [0.8918, 0.4571, 0.3245, 0.2504,
-                #  0.2216, 0.1983, 0.1816, 0.1613,
-                #  0.1586, 0.1413, 0.1364, 0.1307,
-                #  0.1268, 0.1253, 0.1207, 0.1142,
-                #  0.1134, 0.1116, 0.1071, 0.1068])
-                [0.89180, 0.48103, 0.32935, 0.25040,
-                 0.22001, 0.19620, 0.17705, 0.16131,
-                 0.15238, 0.14439, 0.13720, 0.13070,
-                 0.12614, 0.12189, 0.11792, 0.11421,
-                 0.11225, 0.11037, 0.10856, 0.10681])
-        self.import_graph_time = 1.2863
-        self.first_iter_time = 3.7210
+                [941170, 474975, 367447, 259920, 
+                234511, 209103, 183695, 158287,
+                147347, 136408, 125468, 114529,
+                111929, 109329, 106729, 104129,
+                101463, 98797, 96131, 93466,
+                92738, 92011, 91283, 90556,
+                89939, 89322, 88705, 88089])
 
-class Resnet50Model256(Model):
+class DeepspeechModel64(Model):
     def __init__(self):
-        super(Resnet50Model256, self).__init__('Resnet50Model256',
-                153740040 // 256,
-                [1.7870, 0.9100, 0.6052, 0.4604,
-                 0.3898, 0.3368, 0.2958, 0.2625,
-                 0.2437, 0.2235, 0.2124, 0.1986,
-                 0.1890, 0.1832, 0.1756, 0.1631,
-                 0.1628, 0.1537, 0.1495, 0.1426,
-                 0.1420, 0.1355, 0.1369, 0.1306])
-        self.import_graph_time = 1.2863
-        self.first_iter_time = 3.7210
+        super(DeepspeechModel64, self).__init__('DeepspeechModel64',
+                153740040 // 128,
+                [619714, 415717, 385933, 356149,
+                351970, 347791, 343612, 339434, 
+                338022, 336610, 335198, 333786,
+                329423, 325060, 320697, 316334,
+                314514, 312695, 310875, 309056])
 
-class Resnet50Model512(Model):
+class AutoencoderModel51200(Model):
     def __init__(self):
-        super(Resnet50Model512, self).__init__('Resnet50Model512',
-                153740040 // 512,
-                [3.5820, 1.8252, 1.2256, 0.9199,
-                 0.7442, 0.6213, 0.5427, 0.4731,
-                 0.4299, 0.3901, 0.3622, 0.3401,
-                 0.3176, 0.2982, 0.2828, 0.2639,
-                 0.2582, 0.2459, 0.2338, 0.2242,
-                 0.2168, 0.2097, 0.2054, 0.1983,
-                 0.1997, 0.1946, 0.1881, 0.1823,
-                 0.1823, 0.1744, 0.1762, 0.1691,
-                 0.1630, 0.1635, 0.1635, 0.1583,
-                 0.1583, 0.1511, 0.1511, 0.1511,
-                 0.1436, 0.1436, 0.1436, 0.1364,
-                 0.1360, 0.1352, 0.1352, 0.1324])
-        self.import_graph_time = 1.2863
-        self.first_iter_time = 3.7210
+        super(AutoencoderModel51200, self).__init__('AutoencoderModel51200',
+                153740040 // 128,
+                [17823579, 9131074, 6901069, 4671065,
+                4069033, 3467002, 2864971, 2262940,
+                2087242, 1911545, 1735847, 1560150,
+                1447719, 1335289, 1222859, 1110429,
+                1038625, 966821, 895017, 823213,
+                803493, 783773, 764053, 744334,
+                725709, 707085, 688461, 669837,
+                646499, 623162, 599825, 576488,
+                550876, 525265, 499653, 474042,
+                460093, 446144, 432195, 418247,
+                417658, 417069, 416481, 415891,
+                415303, 412098, 408893, 405689,
+                392820, 379952, 367083, 354215, 
+                350944, 347673, 344402, 341132,
+                337458, 333784, 330110, 326437,
+                319036, 311635, 304234, 296833])
+
+class TransformerModel4096(Model):
+    def __init__(self):
+        super(TransformerModel4096, self).__init__('TransformerModel4096',
+                153740040 // 128,
+                [39936031, 20050013, 14982986, 9915959,
+                8689551, 7463143, 6236735, 5010328,
+                4588335, 4166343, 3744351, 3322359,
+                3114202, 2906046, 2697890, 2489734,
+                2367672, 2245611, 2123550, 2001489,
+                1921372, 1841255, 1761138, 1681022,
+                1622270, 1563518, 1504766, 1446014,
+                1401928, 1357843, 1313757, 1269672,
+                1232053, 1194434, 1156815, 1119196,
+                1088336, 1057477, 1026617, 995758,
+                975201, 954644, 934087, 913531,
+                896795, 880060, 863324, 846589,
+                825506, 804424, 783342, 762260,
+                753078, 743896, 734714, 725532,
+                710806, 696080, 681354, 666628,
+                655069, 643511, 631953, 620395])
 
 class DcganModel256(Model):
     def __init__(self):
         super(DcganModel256, self).__init__('DcganModel256',
                 900000000 // 256,
-                # [0.3350,  0.2585,  0.1819,  0.1053,
-                #  0.09790, 0.09049, 0.08308, 0.07566,
-                #  0.07273, 0.06979, 0.06685, 0.06391,
-                #  0.06229, 0.06066, 0.05904, 0.05741,
-                #  0.05643, 0.05544, 0.05445, 0.05346,
-                #  0.05315, 0.05283, 0.05252, 0.05220,
-                #  0.05220, 0.05220, 0.05220, 0.05220,
-                #  0.05178, 0.05134, 0.05090, 0.05046])
-                [0.33500, 0.19395, 0.13649, 0.10530,
-                 0.09590, 0.08805, 0.08139, 0.07567,
-                 0.07233, 0.06929, 0.06650, 0.06393,
-                 0.06215, 0.06048, 0.05890, 0.05741,
-                 0.05637, 0.05537, 0.05441, 0.05349,
-                 0.05314, 0.05282, 0.05251, 0.05223,
-                 0.05196, 0.05171, 0.05148, 0.05126,
-                 0.05105, 0.05085, 0.05066, 0.05048])
-        self.import_graph_time = 0.5550
-        self.first_iter_time = 2.6274
+                [282031, 155580, 122417, 89254,
+                81969, 74685, 67401, 60117,
+                58979, 57841, 56703, 55566,
+                53670, 51774, 49878, 47983,
+                47107, 46232, 45356, 44481])
 
 class ChatbotModel256(Model):
     def __init__(self):
         super(ChatbotModel256, self).__init__('ChatbotModel256',
                 660000000 // 256,
-                # [0.1047,  0.09067, 0.07661, 0.06255])
-                [0.1047, 0.0855, 0.07226, 0.06258])
-        self.import_graph_time = 0.1
-        self.first_iter_time = 0.1
+                [114644, 80233, 73326, 66419])
 
 class VideopredictionModel64(Model):
     def __init__(self):
         super(VideopredictionModel64, self).__init__('VideopredictionModel64',
                 3200000 // 64,
-                # [1.1244, 0.8743, 0.6242, 0.3740,
-                #  0.3534, 0.3327, 0.3121, 0.2914,
-                #  0.2809, 0.2704, 0.2598, 0.2493,
-                #  0.2464, 0.2436, 0.2407, 0.2378,
-                #  0.2332, 0.2285, 0.2238, 0.2191,
-                #  0.2162, 0.2133, 0.2103, 0.2074])
-                [1.12440, 0.67373, 0.48098, 0.37400,
-                 0.34923, 0.32754, 0.30840, 0.29140,
-                 0.27958, 0.26869, 0.25862, 0.24930,
-                 0.24497, 0.24079, 0.23676, 0.23287,
-                 0.22926, 0.22577, 0.22239, 0.21911,
-                 0.21600, 0.21310, 0.21030, 0.20760])
-        self.import_graph_time = 6.4831
-        self.first_iter_time = 17.807
+                [1123488, 625106, 502540, 379974,
+                358674, 337375, 316076, 294777,
+                286352, 277927, 269502, 261078,
+                258117, 255156, 252195, 249234,
+                244498, 239762, 235026, 230291, 
+                227535, 224779, 222023, 219267,
+                219100, 218934, 218768, 218602])
