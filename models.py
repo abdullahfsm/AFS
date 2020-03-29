@@ -150,10 +150,16 @@ class Model(object):
         assert(timeout is None or timeout >= 0)
         self.gpus = num_gpus
         fin_time = self.finish_time()
-        self.next_event_time = min(fin_time, self.next_event_time)
-        if timeout is not None:
+        # self.next_event_time = min(fin_time, self.next_event_time)
+        # if timeout is not None:
+        if timeout is None:
+            # Default event time: when this model finishes
+            self.next_event_time = fin_time
+        else:
             # Set the nearest event only
-            self.next_event_time = min(self.next_event_time, self.current_time + timeout)
+            # assert(self.next_event_time == INF or self.next_event_time <= self.current_time)
+            self.next_event_time = min(fin_time, self.current_time + timeout)
+            # self.next_event_time = min(self.next_event_time, self.current_time + timeout)
         # print('schedule %s: %f, %f' % (self.name, fin_time, self.current_time))
 
     def continue_until(self, time):
@@ -171,6 +177,8 @@ class Model(object):
             self.current_time = time
             self.total_evicted = self.total_evicted_temp + time - self.evicted_time
         else:
+            if self.init_sched_time == INF:
+                self.init_sched_time = self.current_time
             if self.preempted_time == INF:
                 self.tiresias_tj = 0
                 self.total_evicted_temp += self.current_time - self.evicted_time
@@ -189,8 +197,6 @@ class Model(object):
                 if self.remain_iter == 1:
                     self.remain_iter = 0
                 self.current_time = time
-            if self.init_sched_time == INF:
-                self.init_sched_time = time
         assert(self.total_runtime >= self.total_evicted)
 
     def validate(self):

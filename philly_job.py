@@ -117,22 +117,35 @@ class PhillyJob:
             self._num_gpus = None
             self._run_time = None
             self._queueing_delay = None
+            self._completed_time = None
+            self._service_time = None
         else:
+            self._completed_time = attempts[-1]['end_time']
             self._num_gpus = sum([len(detail['gpus']) for detail in self._attempts[0]['detail']])
             if self._attempts[0]['start_time'] is None:
                 self._run_time = None
                 self._queueing_delay = None
             else:
-                if self._attempts[-1]['end_time'] is None:
+                if self._completed_time is None:
                     self._run_time = None
                 else:
                     self._run_time = \
-                        timedelta_to_minutes(self._attempts[-1]['end_time'] -
+                        timedelta_to_minutes(self._completed_time -
                                              self._attempts[0]['start_time'])
                 self._queueing_delay = \
                     timedelta_to_minutes(self._attempts[0]['start_time'] -
                                          self._submitted_time)
-    
+            self._service_time = 0
+            for a in self._attempts:
+                s = a['start_time']
+                e = a['end_time']
+                if s is None or e is None:
+                    self._service_time = None
+                    break
+                self._service_time += timedelta_to_minutes(e - s)
+            if self._service_time is not None:
+                self._service_time -= self._queueing_delay
+
     @property
     def status(self):
         return self._status
@@ -154,6 +167,10 @@ class PhillyJob:
         return self._submitted_time
     
     @property
+    def completed_time(self):
+        return self._completed_time
+    
+    @property
     def user(self):
         return self._user
     
@@ -168,3 +185,7 @@ class PhillyJob:
     @property
     def run_time(self):
         return self._run_time
+
+    @property
+    def service_time(self):
+        return self._service_time
