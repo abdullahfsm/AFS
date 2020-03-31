@@ -1,4 +1,5 @@
 import sys
+import random
 
 INF = float('inf')
 
@@ -199,6 +200,37 @@ def opt_pp(jobs, total_gpus):
     for m in jobs:
         m.schedule(m.tmp_gpus)
 
+def opt_pp_cand(jobs, total_gpus):
+    def fac1(m):
+        return m.throughput(m.tmp_gpus) * m.rdp(m.tmp_gpus)
+    def fac2(m):
+        return m.throughput(m.tmp_gpus + 1) * m.rdp(m.tmp_gpus)
+
+    for j in jobs[:total_gpus]:
+        j.tmp_gpus = 1
+    gpus = total_gpus - len(jobs)
+    if gpus > 0:
+        js = [j for j in jobs if j.max_gpus > 1]
+        while gpus > 0 and len(js) > 0:
+            cand = js[0]
+            for m in js[1:]:
+                if fac2(m) <= fac1(cand):
+                    cand = m
+                elif fac2(cand) > fac1(m):
+                    cand = random.choice([cand, m])
+                # else:
+                #     cand = m
+            cand.tmp_gpus += 1
+            if cand.tmp_gpus == cand.max_gpus:
+                js.remove(cand)
+            gpus -= 1
+    elif gpus < 0:
+        for j in jobs[total_gpus:]:
+            j.tmp_gpus = 0
+
+    for m in jobs:
+        m.schedule(m.tmp_gpus)
+
 def opt_pp_rev(jobs, total_gpus):
     cnt1 = 0
     cnt2 = 0
@@ -243,6 +275,248 @@ def opt_pp_rev(jobs, total_gpus):
                 gpus -= 1
         # sched_cnts = [j.optpp_sched_cnt for j in jobs if j.gpus > 0]
         # log('(%d, %d) %d, %d, %d, %d' % (min(sched_cnts), max(sched_cnts), cnt1, cnt2, cnt3, cnt4))
+
+def opt_pp_rev_cand(jobs, total_gpus):
+    # cnt1 = 0
+    # cnt2 = 0
+    # cnt3 = 0
+    # cnt4 = 0
+    # for j in jobs:
+    #     r = j.exp_remain_time(1)
+    #     if r < 600:
+    #         cnt1 += 1
+    #     elif r < 1800:
+    #         cnt2 += 1
+    #     elif r < 7200:
+    #         cnt3 += 1
+    #     else:
+    #         cnt4 += 1
+    if len(jobs) <= total_gpus:
+        opt_pp_cand(jobs, total_gpus)
+        for j in jobs:
+            j.optpp_sched_cnt = 0
+    else:
+        keep_promoted = []
+        others = []
+        for j in jobs:
+            if j.ts_scheduled != INF:
+                if j.ts_next_event > j.ts_current:
+                    keep_promoted.append(j)
+                else:
+                    j.optpp_sched_cnt += 1
+                    others.append(j)
+            else:
+                others.append(j)
+        for j in keep_promoted:
+            j.schedule(1, j.ts_next_event)
+        gpus = total_gpus - len(keep_promoted)
+        if gpus > 0:
+            others.sort(key=lambda j: j.optpp_sched_cnt)
+        for j in others:
+            if gpus == 0:
+                j.schedule(0)
+            else:
+                j.schedule(1, j.ts_current + 2 * 3600)
+                gpus -= 1
+    # sched_cnts = [j.optpp_sched_cnt for j in jobs if j.gpus > 0]
+    # log('(%d, %d) %d, %d, %d, %d' % (min(sched_cnts), max(sched_cnts), cnt1, cnt2, cnt3, cnt4))
+    
+    # diff = total_gpus - len(jobs)
+    # if diff < 0:
+    #     gpus = total_gpus
+    #     for j in sorted(jobs, key=lambda j: j.exp_remain_time(1)):
+    #         if gpus > 0:
+    #             j.schedule(1)
+    #             gpus -= 1
+    #         else:
+    #             j.schedule(0)
+    # elif diff == 0:
+    #     for j in jobs:
+    #         j.schedule(1)
+    # else:
+    #     for j in jobs:
+    #         j.tmp_gpus = 1
+    #     js = [j for j in jobs if j.max_gpus > 1]
+    #     while diff > 0 and len(js) > 0:
+    #         cand = js[0]
+    #         for m in js[1:]:
+    #             rm0 = m.exp_remain_time(m.tmp_gpus)
+    #             rc0 = cand.exp_remain_time(cand.tmp_gpus)
+    #             if rm0 < rc0:
+    #                 l, h = m, cand
+    #                 rl0, rh0 = rm0, rc0
+    #             else:
+    #                 l, h = cand, m
+    #                 rl0, rh0 = rc0, rm0
+    #             rl1 = l.exp_remain_time(l.tmp_gpus + 1)
+    #             rh1 = h.exp_remain_time(h.tmp_gpus + 1)
+    #             if rl0 / rl1 + rh1 / rh0 > 2:
+    #                 cand = l
+    #             else:
+    #                 cand = h
+    #         cand.tmp_gpus += 1
+    #         if cand.tmp_gpus == cand.max_gpus:
+    #             js.remove(cand)
+    #         diff -= 1
+    #     for j in jobs:
+    #         j.schedule(j.tmp_gpus)
+
+def opt_r(js, total_gpus):
+    """
+      Args:
+        js: List of jobs in finishing order.
+    """
+    def jct_factor(pmap):
+        """
+        Args:
+            pmap:  2D list of p_(job;slot). E.g.
+                    [[p_00, p_10, p_20],
+                    [      p_11, p_21],
+                    [            p_22]]
+        """
+        n = len(pmap[0])
+        f = 1
+        jfs = [1]
+        for j in range(1, n):
+            # jp: list of p_(job;slot) of job j. E.g. [p_20, p_21, p_22].
+            jp = [pmap[s][j - n] for s in range(j + 1)]
+            jf = 0
+            for i in range(j):
+                jf += jfs[i] * (jp[i + 1] - jp[i])
+            jf /= jp[-1]
+            f += jf
+            jfs.append(jf)
+        return f
+
+    n = len(js)
+    rmap = [[1] + [0] * i for i in range(n - 1, 0, -1)]
+    rmap.append([min(js[-1].max_gpus, total_gpus)])
+    pmap = [[js[n - i - 1].throughput(1)] + [0] * i for i in range(n - 1, 0, -1)]
+    pmap.append([js[-1].throughput(min(js[-1].max_gpus, total_gpus))])
+    facs = [0] * (n - 1)
+    facs.append(1)
+    # Optimize rmap
+    for i in range(n - 2, -1, -1):
+        # Start from the longest job to the shortest one
+        fac = jct_factor(pmap[i:])
+        gpus = 1
+        while gpus < total_gpus:
+            # Compare gain of each job and get the max one
+            j = js[i]
+            r = rmap[i][0]
+            # print(rmap, end=',')
+            if r < j.max_gpus:
+                max_gain = fac * (1 - j.throughput(r) * j.times_per_iter(r + 1))
+                max_k = i
+                # rmap[i][0] += 1
+                # print('JCT(%s) %.1f, ' % (str(rmap), calc_sum_jct(js, rmap)), end='')
+                # rmap[i][0] -= 1
+            else:
+                max_gain = -1
+                max_k = None
+            # print('%.4f' % max_gain, end=',')
+            for k in range(i + 1, n):
+                if rmap[i + 1][k - i - 1] == 0:
+                    continue
+                j = js[k]
+                r = rmap[i][k - i]
+                if r >= j.max_gpus:
+                    continue
+                gain = facs[k] * (j.throughput(r + 1) - j.throughput(r)) * j.times_per_iter(rmap[k][0])
+                if gain > max_gain:
+                    max_gain = gain
+                    max_k = k
+                # rmap[i][k - i] += 1
+                # print('JCT(%s) %.1f, ' % (str(rmap), calc_sum_jct(js, rmap)), end='')
+                # rmap[i][k - i] -= 1
+                # print('%.4f' % gain, end=',')
+            if max_k is None:
+                # print('')
+                break
+            # Give one more GPU to the max one
+            rmap[i][max_k - i] += 1
+            p_old = pmap[i][max_k - i]
+            p_new = js[max_k].throughput(rmap[i][max_k - i])
+            pmap[i][max_k - i] = p_new
+            if max_k != i:
+                # Update fac
+                fac -= (p_new - p_old) / pmap[max_k][0]
+            # print('AvgJCT: %.1f' % calc_sum_jct(js, rmap))
+            gpus += 1
+        # Store fac
+        facs[i] = fac
+    # Validate
+    for i in range(n):
+        for j in range(i + 1):
+            assert(rmap[j][i - j] <= js[i].max_gpus)
+    # Return list of GPU share of each slot
+    return rmap
+
+def opt_boundary(jobs, total_gpus):
+    def calc_jcts(js, shares):
+        n = len(js)
+        jct = js[0].exp_remain_time(shares[0][0])
+        ts = [jct]
+        jcts = [jct]
+        for j in range(1, n):
+            # share: list of share of job j.
+            m = js[j]
+            share = [shares[s][j - n] for s in range(j + 1)]
+            jct = 0
+            remain = m.remain_iters
+            for i in range(j):
+                jct += ts[i]
+                remain -= int(ts[i] * m.throughput(share[i]))
+            t = remain * m.times_per_iter(share[j])
+            jct += t
+            jcts.append(jct)
+            ts.append(t)
+        return jcts
+
+    if sum([m.max_gpus for m in jobs]) <= total_gpus:
+        for m in jobs:
+            m.schedule(m.max_gpus)
+        return
+
+    for m in jobs:
+        m.tmp_gpus = 0
+
+    gpus = total_gpus
+    while gpus > 0:
+        max_val = 0
+        j = None
+        for m in jobs:
+            if m.tmp_gpus == m.max_gpus:
+                continue
+            val = m.exp_remain_time(m.tmp_gpus) - m.exp_remain_time(m.tmp_gpus + 1)
+            if val > max_val:
+                max_val = val
+                j = m
+        if j is None:
+            break
+        j.tmp_gpus += 1
+        gpus -= 1
+
+    js = sorted(jobs, key=lambda m: m.exp_remain_time(m.tmp_gpus))
+    shares = opt_r(js, total_gpus)
+    for x in range(3):
+        jcts = calc_jcts(js, shares)
+        jcts, new_js = zip(*sorted(zip(jcts, js), key=lambda t: t[0]))
+        is_equal = True
+        for new, old in zip(new_js, js):
+            if not new is old:
+                is_equal = False
+                break
+        js = list(new_js)
+        if is_equal:
+            break
+        shares = opt_r(js, total_gpus)
+
+    share = shares[0]
+    # log('%d,%f' % (js[0].current_time, sum(jcts)))
+
+    for s, m in zip(share, js):
+        m.schedule(s)
 
 def tiresias_las(jobs, total_gpus, thres=3200, starvation_knob=None, relaxed=False):
     """Tiresias-LAS"""
@@ -454,3 +728,5 @@ MaxMin = max_min
 Opt2Jobs = alg_c
 OptPP = opt_pp
 OptPPRev = opt_pp_rev
+OptPPRevCand = opt_pp_rev_cand
+OptBoundary = opt_boundary

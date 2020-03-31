@@ -1,5 +1,6 @@
 import os
 import io
+import sys
 import json
 import time
 import itertools
@@ -20,7 +21,7 @@ INF = float('inf')
 TraceEntry = namedtuple('TraceEntry', ['ts', 'model', 'iters', 'max_gpus'])
 
 PRINT_TRACE = False
-DRAW_FIGURE = True
+DRAW_FIGURE = False
 
 vgg16 = models.VggnetModel256()
 googlenet = models.GooglenetModel128()
@@ -29,6 +30,7 @@ resnet50 = models.Resnet50Model128()
 deepspeech = models.DeepspeechModel64()
 autoencoder = models.AutoencoderModel51200()
 transformer = models.TransformerModel4096()
+# transformer = models.TransformerModel256()
 dcgan = models.DcganModel256()
 chatbot = models.ChatbotModel256()
 video = models.VideopredictionModel64()
@@ -36,14 +38,16 @@ MODEL_POOL = [vgg16, googlenet, inception4, resnet50, deepspeech,
     autoencoder, transformer, dcgan, chatbot, video]
 
 ALGS = [
-    'Tiresias',
-    'SRTF',
-    'SRSF',
-    'MaxMin',
-    'Optimus',
-    'OptPP',
-    'OptPPRev',
-    'Opt2Jobs',
+    # 'Tiresias',
+    # 'SRTF',
+    # 'SRSF',
+    # 'MaxMin',
+    # 'Optimus',
+    # 'OptPP',
+    # 'OptPPRev',
+    # 'OptPPRevCand',
+    # 'Opt2Jobs',
+    'OptBoundary',
     # '100,10',
 ]
 
@@ -126,6 +130,11 @@ class Job(object):
         if num_gpus <= 0:
             return INF
         return self.remain_iters * self.model.times_per_iter[num_gpus - 1]
+
+    def times_per_iter(self, num_gpus):
+        if num_gpus <= 0:
+            return INF
+        return self.model.times_per_iter[num_gpus - 1]
 
     def throughput(self, num_gpus):
         if num_gpus <= 0:
@@ -263,6 +272,10 @@ def gen_philly_trace(vc, scale, follow_gpu_req=False):
         if iters < 1:
             continue
             # iters = 1
+        # if ts - start <= 80 * 3600 * 24:
+        #     continue
+        # elif ts - start > int(80.5 * 3600 * 24):
+        #     continue
         trace.append(TraceEntry(
             ts=(ts - start) * scale, model=m, iters=iters, max_gpus=mgpus))
     if PRINT_TRACE:
@@ -290,6 +303,9 @@ def gen_philly_trace(vc, scale, follow_gpu_req=False):
             elif isinstance(te.model, models.TransformerModel4096):
                 model_name = 'transformer'
                 bs = 4096
+            elif isinstance(te.model, models.TransformerModel256):
+                model_name = 'transformer'
+                bs = 256
             elif isinstance(te.model, models.DcganModel256):
                 model_name = 'dcgan'
                 bs = 256
@@ -402,15 +418,15 @@ def draw(draw_info, is_vertical=False, sharex=False):
         ax.set_xlabel(xlabel)
 
 def main(vc):
-    trace_no_follow_req = gen_philly_trace(vc, 1, False)
     trace_follow_req = gen_philly_trace(vc, 1, True)
+    trace_no_follow_req = gen_philly_trace(vc, 1, False)
     # trace = gen_tiresias_trace()
     total_gpus = 64
     results = []
     for alg in ALGS:
         if alg == 'Tiresias' or alg == 'SRTF' or alg == 'SRSF':
             trace = trace_follow_req
-        elif alg == 'MaxMin' or alg == 'Opt2Jobs' or alg == 'OptPP' or alg == 'OptPPRev':
+        elif alg == 'MaxMin' or alg == 'Opt2Jobs' or alg == 'OptPP' or alg == 'OptPPRev' or alg == 'OptPPRevCand':
             trace = trace_no_follow_req
         else:
             trace = trace_follow_req
@@ -422,6 +438,7 @@ def main(vc):
                 print(alg, sched.ts, len(sched.jobs_run), flush=True)
                 cnt = 1000
             cnt -= 1
+        print(alg, sched.ts, len(sched.jobs_run), flush=True)
         if len(sched.jobs_run) > 0 or len(sched.jobs_fin) != len(trace):
             raise RuntimeError('Scheduler finished unexpectedly: '
                 'running %d, finished %d, total %d' % (
@@ -514,7 +531,7 @@ def main(vc):
     draw([
         # ('bar', acts),
         ('step', [qls, 'Time (days)', 'QL', 'upper left', False, 1, None, None]),
-        ('step', [fts, 'Time (days)', 'FT', '', True, 200, None, None]),
+        ('step', [fts, 'Time (days)', 'FT', '', True, 1, None, None]),
         ('step', [sis, 'Time (days)', 'SI', '', True, 1, None, None]),
     ], is_vertical=True, sharex=True)
     plt.subplots_adjust(left=.24, right=.99, bottom=.1, top=1.)
@@ -522,16 +539,16 @@ def main(vc):
 
 if __name__ == '__main__':
     for vc in [
-        # '0e4a51',
-        # '103959',
+        '0e4a51',
+        '103959',
         '11cb48',
         # '2869ce',
-        # '6214e9',
-        # '6c71a0',
-        # '7f04ca',
-        # 'b436b2',
-        # 'e13805',
-        # 'ed69ec',
-        # 'ee9e8c'
+        '6214e9',
+        '6c71a0',
+        '7f04ca',
+        'b436b2',
+        'e13805',
+        'ed69ec',
+        'ee9e8c'
         ]:
         main(vc)
