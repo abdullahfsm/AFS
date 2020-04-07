@@ -3,6 +3,8 @@ import random
 
 INF = float('inf')
 
+SCALE = 1
+
 def log(msg, end='\n'):
     sys.stderr.write('%s%s' % (str(msg), end))
 
@@ -159,48 +161,7 @@ def alg_c(jobs, total_gpus):
         for j in jobs:
             j.schedule(j.tmp_gpus)
 
-def alg_c_rough(jobs, total_gpus):
-    diff = total_gpus - len(jobs)
-    if diff < 0:
-        gpus = total_gpus
-        for j in sorted(jobs, key=lambda j: j.exp_remain_time(1)):
-            if gpus > 0:
-                j.schedule(1)
-                gpus -= 1
-            else:
-                j.schedule(0)
-    elif diff == 0:
-        for j in jobs:
-            j.schedule(1)
-    else:
-        max_min(jobs, total_gpus)
-
-def opt_pp(jobs, total_gpus):
-    def fac(m):
-        return m.throughput(m.tmp_gpus + 1) * m.rdp(m.tmp_gpus)
-
-    for j in jobs[:total_gpus]:
-        j.tmp_gpus = 1
-    gpus = total_gpus - len(jobs)
-    if gpus > 0:
-        js = [j for j in jobs if j.max_gpus > 1]
-        while gpus > 0 and len(js) > 0:
-            cand = js[0]
-            for m in js[1:]:
-                if fac(m) <= fac(cand):
-                    cand = m
-            cand.tmp_gpus += 1
-            if cand.tmp_gpus == cand.max_gpus:
-                js.remove(cand)
-            gpus -= 1
-    elif gpus < 0:
-        for j in jobs[total_gpus:]:
-            j.tmp_gpus = 0
-
-    for m in jobs:
-        m.schedule(m.tmp_gpus)
-
-def opt_pp_cand(jobs, total_gpus):
+def lrr_p_helper(jobs, total_gpus):
     def fac1(m):
         return m.throughput(m.tmp_gpus) * m.rdp(m.tmp_gpus)
     def fac2(m):
@@ -229,75 +190,44 @@ def opt_pp_cand(jobs, total_gpus):
             j.tmp_gpus = 0
 
     for m in jobs:
-        m.schedule(m.tmp_gpus)
-
-def opt_pp_rev(jobs, total_gpus):
-    cnt1 = 0
-    cnt2 = 0
-    cnt3 = 0
-    cnt4 = 0
-    for j in jobs:
-        r = j.exp_remain_time(1)
-        if r < 600:
-            cnt1 += 1
-        elif r < 1800:
-            cnt2 += 1
-        elif r < 7200:
-            cnt3 += 1
+        asdf = m.gpus
+        if m.tmp_gpus == 0:
+            m.schedule(0)
         else:
-            cnt4 += 1
-    if len(jobs) <= total_gpus:
-        opt_pp(jobs, total_gpus)
-        for j in jobs:
-            j.optpp_sched_cnt = 0
-    else:
-        keep_promoted = []
-        others = []
-        for j in jobs:
-            if j.ts_scheduled != INF:
-                if j.ts_next_event > j.ts_current:
-                    keep_promoted.append(j)
-                else:
-                    j.optpp_sched_cnt += 1
-                    others.append(j)
-            else:
-                others.append(j)
-        for j in keep_promoted:
-            j.schedule(1, j.ts_next_event)
-        gpus = total_gpus - len(keep_promoted)
-        if gpus > 0:
-            others.sort(key=lambda j: j.optpp_sched_cnt)
-        for j in others:
-            if gpus == 0:
-                j.schedule(0)
-            else:
-                j.schedule(1, j.ts_current + 2 * 3600)
-                gpus -= 1
-        # sched_cnts = [j.optpp_sched_cnt for j in jobs if j.gpus > 0]
-        # log('(%d, %d) %d, %d, %d, %d' % (min(sched_cnts), max(sched_cnts), cnt1, cnt2, cnt3, cnt4))
+            m.schedule(m.tmp_gpus, m.ts_current + 2 * 3600 * SCALE)
 
-def opt_pp_rev_cand(jobs, total_gpus):
-    # cnt1 = 0
-    # cnt2 = 0
-    # cnt3 = 0
-    # cnt4 = 0
-    # for j in jobs:
-    #     r = j.exp_remain_time(1)
-    #     if r < 600:
-    #         cnt1 += 1
-    #     elif r < 1800:
-    #         cnt2 += 1
-    #     elif r < 7200:
-    #         cnt3 += 1
-    #     else:
-    #         cnt4 += 1
-    if len(jobs) <= total_gpus:
-        opt_pp_cand(jobs, total_gpus)
-        for j in jobs:
-            j.optpp_sched_cnt = 0
+def lrr_s_helper(jobs, total_gpus):
+    for j in jobs[:total_gpus]:
+        j.tmp_gpus = 1
+    gpus = total_gpus - len(jobs)
+    if gpus > 0:
+        js = [j for j in jobs if j.max_gpus > 1]
+        while gpus > 0 and len(js) > 0:
+            cand = js[0]
+            for m in js[1:]:
+                if cand.tmp_gpus > m.tmp_gpus:
+                    cand = m
+            cand.tmp_gpus += 1
+            if cand.tmp_gpus == cand.max_gpus:
+                js.remove(cand)
+            gpus -= 1
+    elif gpus < 0:
+        for j in jobs[total_gpus:]:
+            j.tmp_gpus = 0
+
+    for m in jobs:
+        asdf = m.gpus
+        if m.tmp_gpus == 0:
+            m.schedule(0)
+        else:
+            m.schedule(m.tmp_gpus, m.ts_current + 2 * 3600 * SCALE)
+
+def lrr_p(jobs, total_gpus):
+    keep_promoted = []
+    others = []
+    if len(jobs) < total_gpus:
+        others = jobs
     else:
-        keep_promoted = []
-        others = []
         for j in jobs:
             if j.ts_scheduled != INF:
                 if j.ts_next_event > j.ts_current:
@@ -307,59 +237,36 @@ def opt_pp_rev_cand(jobs, total_gpus):
                     others.append(j)
             else:
                 others.append(j)
-        for j in keep_promoted:
-            j.schedule(1, j.ts_next_event)
-        gpus = total_gpus - len(keep_promoted)
-        if gpus > 0:
-            others.sort(key=lambda j: j.optpp_sched_cnt)
-        for j in others:
-            if gpus == 0:
-                j.schedule(0)
+    gpus = total_gpus
+    for j in keep_promoted:
+        j.schedule(j.gpus, j.ts_next_event)
+        gpus -= j.gpus
+    if gpus > 0:
+        others.sort(key=lambda j: (j.optpp_sched_cnt, j.ts_init_scheduled, j.ts_arrival))
+    lrr_p_helper(others, gpus)
+
+def lrr_s(jobs, total_gpus):
+    keep_promoted = []
+    others = []
+    if len(jobs) < total_gpus:
+        others = jobs
+    else:
+        for j in jobs:
+            if j.ts_scheduled != INF:
+                if j.ts_next_event > j.ts_current:
+                    keep_promoted.append(j)
+                else:
+                    j.optpp_sched_cnt += 1
+                    others.append(j)
             else:
-                j.schedule(1, j.ts_current + 2 * 3600)
-                gpus -= 1
-    # sched_cnts = [j.optpp_sched_cnt for j in jobs if j.gpus > 0]
-    # log('(%d, %d) %d, %d, %d, %d' % (min(sched_cnts), max(sched_cnts), cnt1, cnt2, cnt3, cnt4))
-    
-    # diff = total_gpus - len(jobs)
-    # if diff < 0:
-    #     gpus = total_gpus
-    #     for j in sorted(jobs, key=lambda j: j.exp_remain_time(1)):
-    #         if gpus > 0:
-    #             j.schedule(1)
-    #             gpus -= 1
-    #         else:
-    #             j.schedule(0)
-    # elif diff == 0:
-    #     for j in jobs:
-    #         j.schedule(1)
-    # else:
-    #     for j in jobs:
-    #         j.tmp_gpus = 1
-    #     js = [j for j in jobs if j.max_gpus > 1]
-    #     while diff > 0 and len(js) > 0:
-    #         cand = js[0]
-    #         for m in js[1:]:
-    #             rm0 = m.exp_remain_time(m.tmp_gpus)
-    #             rc0 = cand.exp_remain_time(cand.tmp_gpus)
-    #             if rm0 < rc0:
-    #                 l, h = m, cand
-    #                 rl0, rh0 = rm0, rc0
-    #             else:
-    #                 l, h = cand, m
-    #                 rl0, rh0 = rc0, rm0
-    #             rl1 = l.exp_remain_time(l.tmp_gpus + 1)
-    #             rh1 = h.exp_remain_time(h.tmp_gpus + 1)
-    #             if rl0 / rl1 + rh1 / rh0 > 2:
-    #                 cand = l
-    #             else:
-    #                 cand = h
-    #         cand.tmp_gpus += 1
-    #         if cand.tmp_gpus == cand.max_gpus:
-    #             js.remove(cand)
-    #         diff -= 1
-    #     for j in jobs:
-    #         j.schedule(j.tmp_gpus)
+                others.append(j)
+    gpus = total_gpus
+    for j in keep_promoted:
+        j.schedule(j.gpus, j.ts_next_event)
+        gpus -= j.gpus
+    if gpus > 0:
+        others.sort(key=lambda j: (j.optpp_sched_cnt, j.ts_init_scheduled, j.ts_arrival))
+    lrr_s_helper(others, gpus)
 
 def opt_r(js, total_gpus):
     """
@@ -452,6 +359,9 @@ def opt_r(js, total_gpus):
     # Return list of GPU share of each slot
     return rmap
 
+OPT_BOUNDARY_JOBS = None
+OPT_BOUNDARY_SHARES = None
+
 def opt_boundary(jobs, total_gpus):
     def calc_jcts(js, shares):
         n = len(js)
@@ -467,15 +377,32 @@ def opt_boundary(jobs, total_gpus):
             for i in range(j):
                 jct += ts[i]
                 remain -= int(ts[i] * m.throughput(share[i]))
+            # assert(remain > 0)
             t = remain * m.times_per_iter(share[j])
             jct += t
             jcts.append(jct)
             ts.append(t)
         return jcts
 
+    global OPT_BOUNDARY_JOBS
+    global OPT_BOUNDARY_SHARES
+
     if sum([m.max_gpus for m in jobs]) <= total_gpus:
         for m in jobs:
             m.schedule(m.max_gpus)
+        OPT_BOUNDARY_JOBS = None
+        OPT_BOUNDARY_SHARES = None
+        return
+
+    if OPT_BOUNDARY_JOBS is not None and set(jobs) == set(OPT_BOUNDARY_JOBS[1:]):
+        del OPT_BOUNDARY_SHARES[0]
+        del OPT_BOUNDARY_JOBS[0]
+        for s, j in zip(OPT_BOUNDARY_SHARES[0], OPT_BOUNDARY_JOBS):
+            j.schedule(s)
+        # log(', '.join(['%d:%d' % (j.jid, j.gpus) for j in OPT_BOUNDARY_JOBS]))
+        # log(', '.join(['%d:%.3f' % (j.jid, j.exp_remain_time(j.gpus)) for j in OPT_BOUNDARY_JOBS]))
+        # log(', '.join(['%d:%.3f' % (j.jid, j.ts_current) for j in OPT_BOUNDARY_JOBS]))
+        # log(', '.join(['%d:%.3f' % (j.jid, j.ts_exp_fin) for j in OPT_BOUNDARY_JOBS]))
         return
 
     for m in jobs:
@@ -499,7 +426,7 @@ def opt_boundary(jobs, total_gpus):
 
     js = sorted(jobs, key=lambda m: m.exp_remain_time(m.tmp_gpus))
     shares = opt_r(js, total_gpus)
-    for x in range(3):
+    for x in range(1):
         jcts = calc_jcts(js, shares)
         jcts, new_js = zip(*sorted(zip(jcts, js), key=lambda t: t[0]))
         is_equal = True
@@ -511,15 +438,20 @@ def opt_boundary(jobs, total_gpus):
         if is_equal:
             break
         shares = opt_r(js, total_gpus)
+    # for s in shares:
+    #     log(s)
+    OPT_BOUNDARY_SHARES = shares
+    OPT_BOUNDARY_JOBS = js
 
-    share = shares[0]
-    # log('%d,%f' % (js[0].current_time, sum(jcts)))
-
-    for s, m in zip(share, js):
+    for s, m in zip(shares[0], js):
         m.schedule(s)
+    # log(', '.join(['%d:%d' % (j.jid, j.gpus) for j in js]))
+    # log(jcts)
+    # log([m.exp_remain_time(m.gpus) for m in js])
 
 def tiresias_las(jobs, total_gpus, thres=3200, starvation_knob=None, relaxed=False):
     """Tiresias-LAS"""
+    thres *= SCALE
     gpus = total_gpus
     neg_pri = []
     zero_pri = []
@@ -726,7 +658,5 @@ SRSF = srsf
 Optimus = optimus
 MaxMin = max_min
 Opt2Jobs = alg_c
-OptPP = opt_pp
-OptPPRev = opt_pp_rev
-OptPPRevCand = opt_pp_rev_cand
+OptPP = lrr_p
 OptBoundary = opt_boundary

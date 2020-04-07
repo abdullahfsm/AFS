@@ -10,6 +10,7 @@ import pickle
 import string
 import random
 import numpy as np
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 from collections import namedtuple
 
@@ -18,36 +19,37 @@ import models
 from philly_job import PhillyJob
 
 INF = float('inf')
-TraceEntry = namedtuple('TraceEntry', ['ts', 'model', 'iters', 'max_gpus'])
+TraceEntry = namedtuple('TraceEntry', ['ts', 'model', 'iters', 'max_gpus', 'req_gpus'])
 
 PRINT_TRACE = False
-DRAW_FIGURE = False
+DRAW_FIGURE = True
+SCALE = 1
 
 vgg16 = models.VggnetModel256()
 googlenet = models.GooglenetModel128()
 inception4 = models.Inception4Model256()
 resnet50 = models.Resnet50Model128()
 deepspeech = models.DeepspeechModel64()
-autoencoder = models.AutoencoderModel51200()
-transformer = models.TransformerModel4096()
-# transformer = models.TransformerModel256()
+# autoencoder = models.AutoencoderModel51200()
+# transformer = models.TransformerModel4096()
+transformer = models.TransformerModel256()
 dcgan = models.DcganModel256()
 chatbot = models.ChatbotModel256()
 video = models.VideopredictionModel64()
 MODEL_POOL = [vgg16, googlenet, inception4, resnet50, deepspeech,
-    autoencoder, transformer, dcgan, chatbot, video]
+    # autoencoder,
+    transformer,
+    dcgan, chatbot, video]
 
 ALGS = [
-    # 'Tiresias',
+    'Tiresias',
     # 'SRTF',
     # 'SRSF',
-    # 'MaxMin',
     # 'Optimus',
-    # 'OptPP',
-    # 'OptPPRev',
-    # 'OptPPRevCand',
+    # 'MaxMin',
+    'OptPP',
     # 'Opt2Jobs',
-    'OptBoundary',
+    # 'OptBoundary',
     # '100,10',
 ]
 
@@ -59,13 +61,14 @@ def randcode():
     return ''.join(random.choice(RANDCODE_CHARS) for _ in range(8))
 
 class Job(object):
-    def __init__(self, jid, ts_arrival, model, iters, max_gpus):
+    def __init__(self, jid, ts_arrival, model, iters, max_gpus, req_gpus):
         # Constants.
         self.jid = jid
         self.ts_arrival = ts_arrival
         self.model = model
         self.iters = iters
         self.max_gpus = max_gpus
+        self.req_gpus = req_gpus
         # Status.
         self.ts_current = ts_arrival
         self.ts_exp_fin = INF
@@ -118,6 +121,17 @@ class Job(object):
             self.ts_scheduled = INF
             self.tpi = INF
             self.ts_exp_fin = INF
+        elif num_gpus == 0:
+            assert(self.tpi == INF)
+            assert(self.ts_exp_fin == INF)
+        elif num_gpus > 0:
+            if num_gpus != self.gpus:
+                self.tpi = self.model.times_per_iter[num_gpus - 1]
+            ts_exp_fin = math.ceil(self.ts_current + self.remain_iters * self.tpi)
+            if self.gpus == num_gpus and abs(self.ts_exp_fin - ts_exp_fin) > ts_exp_fin * 0.1:
+                print('%d, %d' % (self.ts_exp_fin, ts_exp_fin), flush=True)
+            else:
+                self.ts_exp_fin = ts_exp_fin
         if ts_next_event == INF:
             self.ts_next_event = self.ts_exp_fin
         else:
@@ -140,6 +154,9 @@ class Job(object):
         if num_gpus <= 0:
             return 0
         return self.model.throughputs[num_gpus - 1]
+
+    def dp(self, num_gpus):
+        return self.model.dps[num_gpus]
 
     def rdp(self, num_gpus):
         return self.model.rdps[num_gpus]
@@ -233,7 +250,7 @@ class Scheduler(object):
                 raise RuntimeError('Allocated GPUs more than total: %d / %d' % (
                     num_assigned_gpus, self.total_gpus))
 
-def gen_philly_trace(vc, scale, follow_gpu_req=False):
+def gen_philly_trace(vc, scale, follow_gpu_req=False, num_offline=0):
     VC = ['0e4a51', '103959', '11cb48', '2869ce', '51b7ef', '6214e9',
         '6c71a0', '7f04ca', 'b436b2', 'e13805', 'ed69ec', 'ee9e8c']
     assert(vc in VC)
@@ -267,17 +284,33 @@ def gen_philly_trace(vc, scale, follow_gpu_req=False):
             mgpus = job.num_gpus
         else:
             mgpus = m.max_gpus
-        serv_time = job.service_time * 60 * scale
+        serv_time = job.service_time * 60 * scale + 0
         iters = serv_time / m.times_per_iter[job.num_gpus - 1]
         if iters < 1:
             continue
             # iters = 1
-        # if ts - start <= 80 * 3600 * 24:
+        # Running a part of trace
+        # if ts - start <= 47 * 3600 * 24:
         #     continue
-        # elif ts - start > int(80.5 * 3600 * 24):
+        # elif ts - start > int(53 * 3600 * 24):
         #     continue
         trace.append(TraceEntry(
-            ts=(ts - start) * scale, model=m, iters=iters, max_gpus=mgpus))
+            ts=(ts - start) * scale, model=m, iters=iters,
+            max_gpus=mgpus, req_gpus=job.num_gpus))
+    # rescaled = []
+    # for e in trace:
+    #     rescaled.append(TraceEntry(
+    #         ts=e.ts * 1, model=e.model, iters=e.iters * 1,
+    #         max_gpus=e.max_gpus, req_gpus=e.req_gpus))
+    # trace = rescaled
+    if num_offline > 0:
+        random.seed(time.time())
+        rand_entries = random.choices(trace, k=num_offline)
+        trace.clear()
+        for e in rand_entries:
+            trace.append(TraceEntry(
+                ts=0, model=e.model, iters=e.iters,
+                max_gpus=e.max_gpus, req_gpus=e.req_gpus))
     if PRINT_TRACE:
         prev_time = 0
         last_time = 0
@@ -321,11 +354,11 @@ def gen_philly_trace(vc, scale, follow_gpu_req=False):
             prev_time = te.ts
             print(str({"model": model_name, "bs": bs,
                 "iter": int(te.iters), "job_name": "%s_%s" % (model_name, randcode()),
-                "req": te.max_gpus, "start_time": "%d" % start_time}) + ',')
+                "req": te.req_gpus, "start_time": "%d" % start_time}) + ',')
         sys.exit(0)
     return trace
 
-def gen_tiresias_trace():
+def gen_tiresias_trace(num_offline):
     pool_2 = [m for m in MODEL_POOL if m.max_gpus >= 2]
     pool_4 = [m for m in MODEL_POOL if m.max_gpus >= 4]
     pool_8 = [m for m in MODEL_POOL if m.max_gpus >= 8]
@@ -351,13 +384,22 @@ def gen_tiresias_trace():
         while iters < 1:
             iters = serv_time / m.times_per_iter[ngpu - 1]
         trace.append(TraceEntry(
-            ts=ts, model=m, iters=iters, max_gpus=ngpu))
+            ts=ts, model=m, iters=iters, max_gpus=ngpu, req_gpus=ngpu))
         # Poisson random interval (avg 30 sec).
         ts += np.random.poisson(30)
+
+    if num_offline > 0:
+        random.seed(time.time())
+        rand_entries = random.choices(trace, k=num_offline)
+        trace.clear()
+        for e in rand_entries:
+            trace.append(TraceEntry(
+                ts=0, model=e.model, iters=e.iters,
+                max_gpus=e.max_gpus, req_gpus=e.req_gpus))
     return trace
 
 _COLORS = {'Tiresias-L': 'C0', 'SRTF': 'C1', 'max-min': 'C2',
-    'Opt2Jobs': 'C3', 'SRSF': 'C4', 'OptPP': 'C5'}
+    'Opt2Jobs': 'C5', 'SRSF': 'C4', 'OptPP': 'C3'}
 
 def draw(draw_info, is_vertical=False, sharex=False):
     num = len(draw_info)
@@ -371,6 +413,7 @@ def draw(draw_info, is_vertical=False, sharex=False):
         draw_type, fig_info = info
         if draw_type == 'step' or draw_type == 'plot':
             data, xlabel, ylabel, legend, is_log, ws, xlim, ylim = fig_info
+            legend_handles = []
             for alg, v in data.items():
                 x, y, color = v
                 if ws > 1:
@@ -383,9 +426,10 @@ def draw(draw_info, is_vertical=False, sharex=False):
                 else:
                     wy = y
                 if draw_type == 'step':
-                    ax.step(x, wy, label=alg, color=color, where='post', linewidth=.8)
+                    ax.step(x, wy, label=alg, color=color, where='post', linewidth=.6)
                 else:
-                    ax.plot(x, wy, label=alg, color=color, linewidth=.8)
+                    ax.plot(x, wy, label=alg, color=color, linewidth=.6)
+                legend_handles.append(mpatches.Patch(color=color, label=alg))
             if not sharex or not is_vertical:
                 ax.set_xlabel(xlabel)
             ax.set_ylabel(ylabel)
@@ -393,7 +437,7 @@ def draw(draw_info, is_vertical=False, sharex=False):
                 ax.set_yscale('log')
                 ax.axhline(y=1, color='black', linewidth=1, linestyle='-')
             if legend != '':
-                ax.legend(loc=legend, fontsize='x-small')
+                ax.legend(handles=legend_handles, loc=legend, ncol=2, fontsize='x-small')
             if xlim:
                 ax.set_xlim(*xlim)
             if ylim:
@@ -418,15 +462,17 @@ def draw(draw_info, is_vertical=False, sharex=False):
         ax.set_xlabel(xlabel)
 
 def main(vc):
-    trace_follow_req = gen_philly_trace(vc, 1, True)
-    trace_no_follow_req = gen_philly_trace(vc, 1, False)
-    # trace = gen_tiresias_trace()
+    num_offline = 0
+    trace_follow_req = gen_philly_trace(vc, SCALE, True, num_offline)
+    trace_no_follow_req = gen_philly_trace(vc, SCALE, False, num_offline)
+    # trace_follow_req = gen_tiresias_trace(num_offline)
+    # trace_no_follow_req = trace_follow_req
     total_gpus = 64
     results = []
     for alg in ALGS:
         if alg == 'Tiresias' or alg == 'SRTF' or alg == 'SRSF':
             trace = trace_follow_req
-        elif alg == 'MaxMin' or alg == 'Opt2Jobs' or alg == 'OptPP' or alg == 'OptPPRev' or alg == 'OptPPRevCand':
+        elif alg == 'MaxMin' or ('Opt' in alg):
             trace = trace_no_follow_req
         else:
             trace = trace_follow_req
@@ -448,6 +494,10 @@ def main(vc):
             alg = 'Tiresias-L'
         elif alg == 'MaxMin':
             alg = 'max-min'
+        elif 'OptPP' in alg:
+            alg = 'LRR-P'
+        elif alg == 'Opt2Jobs':
+            alg = 'LRR-L'
         results.append((alg, sched.jobs_fin))
 
     # Print ACTs first.
@@ -531,24 +581,24 @@ def main(vc):
     draw([
         # ('bar', acts),
         ('step', [qls, 'Time (days)', 'QL', 'upper left', False, 1, None, None]),
-        ('step', [fts, 'Time (days)', 'FT', '', True, 1, None, None]),
-        ('step', [sis, 'Time (days)', 'SI', '', True, 1, None, None]),
+        ('step', [fts, 'Time (days)', 'Sum. FT', '', True, 200, None, (0.005, 0.4)]),
+        ('step', [sis, 'Time (days)', 'Avg. BI', '', True, 1, None, None]),
     ], is_vertical=True, sharex=True)
     plt.subplots_adjust(left=.24, right=.99, bottom=.1, top=1.)
     plt.show()
 
 if __name__ == '__main__':
     for vc in [
-        '0e4a51',
-        '103959',
+        # 'ed69ec',
         '11cb48',
         # '2869ce',
-        '6214e9',
-        '6c71a0',
-        '7f04ca',
-        'b436b2',
-        'e13805',
-        'ed69ec',
-        'ee9e8c'
+        # '103959',
+        # 'ee9e8c',
+        # '7f04ca',
+        # 'e13805',
+        # '6c71a0',
+        # 'b436b2',
+        # '6214e9',
+        # '0e4a51',
         ]:
         main(vc)

@@ -143,8 +143,6 @@ class PhillyJob:
                     self._service_time = None
                     break
                 self._service_time += timedelta_to_minutes(e - s)
-            if self._service_time is not None:
-                self._service_time -= self._queueing_delay
 
     @property
     def status(self):
