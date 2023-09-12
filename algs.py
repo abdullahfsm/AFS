@@ -41,6 +41,15 @@ def fifo(jobs, total_gpus):
             gpus -= m.max_gpus
             m.schedule(m.max_gpus)
 
+def fifo_elastic(jobs, total_gpus):
+    fifo_sorted = sorted(jobs, key=lambda m: (m.ts_scheduled, m.ts_arrival))
+    gpus = total_gpus
+    for m in fifo_sorted:
+
+        allocation = min(m.max_gpus, gpus)
+        m.schedule(allocation)
+        gpus -= allocation
+
 def srtf(jobs, total_gpus):
     srtf_sorted = sorted(jobs, key=lambda m: m.exp_remain_time(m.max_gpus))
     gpus = total_gpus
@@ -61,6 +70,15 @@ def srsf(jobs, total_gpus):
             gpus -= m.max_gpus
             m.schedule(m.max_gpus)
 
+def srsf_elastic(jobs, total_gpus):
+    srsf_sorted = sorted(jobs, key=lambda m: m.max_gpus * m.exp_remain_time(m.max_gpus))
+    gpus = total_gpus
+    for m in srsf_sorted:
+
+        allocation = min(m.max_gpus, gpus)
+        m.schedule(allocation)
+        gpus -= allocation
+        
 def optimus(jobs, total_gpus):
     for m in jobs:
         m.tmp_gpus = 0
@@ -652,9 +670,11 @@ def tiresias_1000_starve(jobs, total_gpus):
 
 
 FIFO = fifo
+FIFO_ELASTIC = fifo_elastic
 Tiresias = tiresias_50_starve
 SRTF = srtf
 SRSF = srsf
+SRSF_ELASTIC = srsf_elastic
 Optimus = optimus
 MaxMin = max_min
 Opt2Jobs = alg_c

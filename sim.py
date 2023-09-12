@@ -22,7 +22,7 @@ INF = float('inf')
 TraceEntry = namedtuple('TraceEntry', ['ts', 'model', 'iters', 'max_gpus', 'req_gpus'])
 
 PRINT_TRACE = False
-DRAW_FIGURE = True
+DRAW_FIGURE = False
 SCALE = 1
 
 vgg16 = models.VggnetModel256()
@@ -42,12 +42,15 @@ MODEL_POOL = [vgg16, googlenet, inception4, resnet50, deepspeech,
     dcgan, chatbot, video]
 
 ALGS = [
-    'Tiresias',
+    "FIFO_ELASTIC",
+    # "FIFO_ELASTIC",
+    # 'FIFO'
+    # 'Tiresias',
     # 'SRTF',
     # 'SRSF',
     # 'Optimus',
     # 'MaxMin',
-    'OptPP',
+    # 'OptPP',
     # 'Opt2Jobs',
     # 'OptBoundary',
     # '100,10',
@@ -76,7 +79,7 @@ class Job(object):
         self.ts_init_scheduled = INF
         self.ts_scheduled = INF
         self.ts_next_event = INF
-        self.sched_history = []
+
         self.remain_iters = iters
         self.gpus = 0
         self.tpi = INF
@@ -89,6 +92,9 @@ class Job(object):
         self.optpp_sched_cnt = 0
         #
         self.tmp_gpus = None
+
+        self.sched_history = [(self.ts_current, self.gpus, self.remain_iters)]
+        # self.gpu_allocation_history = []
 
     def __lt__(self, job):
         return self.jid < job.jid
@@ -138,6 +144,7 @@ class Job(object):
             self.ts_next_event = min(math.ceil(ts_next_event), self.ts_exp_fin)
         if self.gpus != num_gpus:
             self.sched_history.append((self.ts_current, num_gpus, self.remain_iters))
+        
         self.gpus = num_gpus
 
     def exp_remain_time(self, num_gpus):
@@ -500,9 +507,26 @@ def main(vc):
             alg = 'LRR-L'
         results.append((alg, sched.jobs_fin))
 
+
+
     # Print ACTs first.
     acts = {}
     for alg, jobs in results:
+
+        with open(f"job_sched_history_{vc}_{alg}",'wb') as fp:
+            for j in jobs:
+                if len(j.sched_history) > 2:
+                        pickle.dump(j,fp)
+
+        
+        preemption_data = [len(j.sched_history) for j in jobs]
+        preemption_data.sort()
+        cdf = np.linspace(0,1,len(preemption_data))
+
+        plt.figure()
+        plt.plot(preemption_data, cdf)
+        plt.savefig(f"preemption_data_{vc}_{alg}.png", dpi=300)
+
         act = sum([j.sojourn_time() for j in jobs]) / len(jobs) / 60.
         acts[alg] = [act, _COLORS.get(alg, None)]
     print(vc, [a[0] for a in acts.values()], flush=True)
@@ -585,18 +609,18 @@ def main(vc):
         ('step', [sis, 'Time (days)', 'Avg. BI', '', True, 1, None, None]),
     ], is_vertical=True, sharex=True)
     plt.subplots_adjust(left=.24, right=.99, bottom=.1, top=1.)
-    plt.show()
+    plt.savefig("results_run.png")
 
 if __name__ == '__main__':
     for vc in [
         # 'ed69ec',
-        '11cb48',
+        # '11cb48',
         # '2869ce',
         # '103959',
         # 'ee9e8c',
         # '7f04ca',
         # 'e13805',
-        # '6c71a0',
+        '6c71a0',
         # 'b436b2',
         # '6214e9',
         # '0e4a51',
