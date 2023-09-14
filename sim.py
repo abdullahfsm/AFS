@@ -18,6 +18,8 @@ import algs
 import models
 from philly_job import PhillyJob
 
+import ray
+
 INF = float('inf')
 TraceEntry = namedtuple('TraceEntry', ['ts', 'model', 'iters', 'max_gpus', 'req_gpus'])
 
@@ -43,6 +45,7 @@ MODEL_POOL = [vgg16, googlenet, inception4, resnet50, deepspeech,
 
 ALGS = [
     "FIFO_ELASTIC",
+    "SRSF_ELASTIC"
     # "FIFO_ELASTIC",
     # 'FIFO'
     # 'Tiresias',
@@ -114,7 +117,7 @@ class Job(object):
         else:
             self.ts_current = ts
 
-    def schedule(self, num_gpus, ts_next_event=INF):
+    def schedule(self, num_gpus, ts_next_event=INF, available_gpus=0):
         if self.gpus == 0 and num_gpus > 0:
             if self.ts_init_scheduled == INF:
                 self.ts_init_scheduled = self.ts_current
@@ -143,7 +146,7 @@ class Job(object):
         else:
             self.ts_next_event = min(math.ceil(ts_next_event), self.ts_exp_fin)
         if self.gpus != num_gpus:
-            self.sched_history.append((self.ts_current, num_gpus, self.remain_iters))
+            self.sched_history.append((self.ts_current, num_gpus, self.remain_iters, available_gpus))
         
         self.gpus = num_gpus
 
@@ -195,6 +198,8 @@ class Scheduler(object):
                 self.arrival_events.append([(next_ts, job.jid, job)])
         self.arrival_events.reverse()
         self.events = self.arrival_events.pop()
+        self.availability_history = []
+
 
     def is_done(self):
         return len(self.events) == 0
@@ -253,6 +258,8 @@ class Scheduler(object):
                     for job in nearest_event_jobs])
             # Verification.
             num_assigned_gpus = sum([j.gpus for j in self.jobs_run])
+            
+            self.availability_history.append((self.ts, self.total_gpus - num_assigned_gpus))
             if num_assigned_gpus > self.total_gpus:
                 raise RuntimeError('Allocated GPUs more than total: %d / %d' % (
                     num_assigned_gpus, self.total_gpus))
@@ -468,64 +475,71 @@ def draw(draw_info, is_vertical=False, sharex=False):
     if sharex and is_vertical:
         ax.set_xlabel(xlabel)
 
-def main(vc):
+
+@ray.remote
+def main(vc, alg, num_gpus=64):
     num_offline = 0
     trace_follow_req = gen_philly_trace(vc, SCALE, True, num_offline)
     trace_no_follow_req = gen_philly_trace(vc, SCALE, False, num_offline)
     # trace_follow_req = gen_tiresias_trace(num_offline)
     # trace_no_follow_req = trace_follow_req
-    total_gpus = 64
+    total_gpus = num_gpus
     results = []
-    for alg in ALGS:
-        if alg == 'Tiresias' or alg == 'SRTF' or alg == 'SRSF':
-            trace = trace_follow_req
-        elif alg == 'MaxMin' or ('Opt' in alg):
-            trace = trace_no_follow_req
-        else:
-            trace = trace_follow_req
-        cnt = 0
-        sched = Scheduler(alg, total_gpus, trace)
-        while not sched.is_done():
-            sched.continue_next_event()
-            if cnt == 0:
-                print(alg, sched.ts, len(sched.jobs_run), flush=True)
-                cnt = 1000
-            cnt -= 1
-        print(alg, sched.ts, len(sched.jobs_run), flush=True)
-        if len(sched.jobs_run) > 0 or len(sched.jobs_fin) != len(trace):
-            raise RuntimeError('Scheduler finished unexpectedly: '
-                'running %d, finished %d, total %d' % (
-                    len(sched.jobs_run), len(sched.jobs_fin), len(trace)))
-        # Summarize results.
-        if alg == 'Tiresias':
-            alg = 'Tiresias-L'
-        elif alg == 'MaxMin':
-            alg = 'max-min'
-        elif 'OptPP' in alg:
-            alg = 'LRR-P'
-        elif alg == 'Opt2Jobs':
-            alg = 'LRR-L'
-        results.append((alg, sched.jobs_fin))
+
+    if alg == 'Tiresias' or alg == 'SRTF' or alg == 'SRSF':
+        trace = trace_follow_req
+    elif alg == 'MaxMin' or ('Opt' in alg):
+        trace = trace_no_follow_req
+    else:
+        trace = trace_follow_req
+    cnt = 0
+    sched = Scheduler(alg, total_gpus, trace)
+    while not sched.is_done():
+        sched.continue_next_event()
+        if cnt == 0:
+            print(alg, sched.ts, len(sched.jobs_run), flush=True)
+            cnt = 1000
+        cnt -= 1
+    print(alg, sched.ts, len(sched.jobs_run), flush=True)
+    if len(sched.jobs_run) > 0 or len(sched.jobs_fin) != len(trace):
+        raise RuntimeError('Scheduler finished unexpectedly: '
+            'running %d, finished %d, total %d' % (
+                len(sched.jobs_run), len(sched.jobs_fin), len(trace)))
+    # Summarize results.
+    if alg == 'Tiresias':
+        alg = 'Tiresias-L'
+    elif alg == 'MaxMin':
+        alg = 'max-min'
+    elif 'OptPP' in alg:
+        alg = 'LRR-P'
+    elif alg == 'Opt2Jobs':
+        alg = 'LRR-L'
+
+
+    return [vc, alg, num_gpus, sched]
+
+    results.append((alg, sched.jobs_fin))
 
 
 
     # Print ACTs first.
     acts = {}
+
     for alg, jobs in results:
 
-        with open(f"job_sched_history_{vc}_{alg}",'wb') as fp:
-            for j in jobs:
-                if len(j.sched_history) > 2:
-                        pickle.dump(j,fp)
+        with open(f"job_sched_history_{vc}_{alg}_{num_gpus}.pkl",'wb') as fp:
+            pickle.dump(jobs,fp)
 
+        with open(f"sched_sched_history_{vc}_{alg}_{num_gpus}.pkl",'wb') as fp:
+            pickle.dump(sched.availability_history,fp)
         
-        preemption_data = [len(j.sched_history) for j in jobs]
-        preemption_data.sort()
-        cdf = np.linspace(0,1,len(preemption_data))
+        # preemption_data = [len(j.sched_history) for j in jobs]
+        # preemption_data.sort()
+        # cdf = np.linspace(0,1,len(preemption_data))
 
-        plt.figure()
-        plt.plot(preemption_data, cdf)
-        plt.savefig(f"preemption_data_{vc}_{alg}.png", dpi=300)
+        # plt.figure()
+        # plt.plot(preemption_data, cdf)
+        # plt.savefig(f"preemption_data_{vc}_{alg}.png", dpi=300)
 
         act = sum([j.sojourn_time() for j in jobs]) / len(jobs) / 60.
         acts[alg] = [act, _COLORS.get(alg, None)]
@@ -612,17 +626,44 @@ def main(vc):
     plt.savefig("results_run.png")
 
 if __name__ == '__main__':
-    for vc in [
-        # 'ed69ec',
-        # '11cb48',
-        # '2869ce',
-        # '103959',
-        # 'ee9e8c',
-        # '7f04ca',
-        # 'e13805',
-        '6c71a0',
-        # 'b436b2',
-        # '6214e9',
-        # '0e4a51',
-        ]:
-        main(vc)
+
+    ray.init()
+
+    futures = list()
+
+    # for num_gpus in 
+    for alg in ALGS:
+        # for num_gpus in [100,200,300,400,500]:
+        for num_gpus in [100]:
+            for vc in [
+                # 'ed69ec',
+                # '11cb48',
+                # '2869ce',
+                # '103959',
+                # 'ee9e8c',
+                # '7f04ca',
+                # 'e13805',
+                # '6c71a0',
+                # 'b436b2',
+                # '6214e9',
+                '0e4a51',
+                ]:
+                    futures.append(main.remote(vc,alg,num_gpus=num_gpus))
+
+    finished = ray.get(futures)
+
+    for result in finished:
+        vc, alg, num_gpus, sched = result
+
+        with open(f"job_sched_history_{vc}_{alg}_{num_gpus}.pkl",'wb') as fp:
+            pickle.dump(sched.jobs_fin,fp)
+
+        with open(f"sched_sched_history_{vc}_{alg}_{num_gpus}.pkl",'wb') as fp:
+            pickle.dump(sched.availability_history,fp)
+
+
+
+
+
+
+
